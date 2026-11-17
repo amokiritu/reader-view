@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Five Small Scripts Worth Keeping | by Test Author | Medium</title>
+<meta property="og:title" content="Five Small Scripts Worth Keeping">
+<meta name="author" content="Test Author">
+<style>body{font-family:Georgia,serif;max-width:700px;margin:40px auto;line-height:1.6} pre{background:#f2f2f2;padding:12px;overflow:auto} .linenos{color:#999}</style>
+</head><body>
+<nav class="metabar">Medium · Sign in · Get started</nav>
+<article><div class="section-inner">
+<h1 class="pw-post-title">Five Small Scripts Worth Keeping</h1>
+<p class="pw-author">Test Author · 6 min read</p>
+<p class="pw-post-body-paragraph">Shell scripts are the duct tape of software teams. They glue together builds, deployments and the small chores nobody wants to do by hand, and they tend to live far longer than anyone expects when they are first written.</p>
+<p class="pw-post-body-paragraph">In this walkthrough we look at a handful of small, real examples. Each one shows a pattern worth keeping, from rewriting commit authors to adding SSH keys, and we finish with a tiny Python and JavaScript helper.</p>
+<p class="pw-post-body-paragraph">None of these snippets is clever. That is the point: the code you will maintain for years should be boring, obvious and easy to copy into a terminal when you need it at two in the morning.</p>
+<p class="pw-post-body-paragraph">Before running anything, read it. A script that rewrites history or touches your keys deserves a second look, and the few minutes it takes are cheaper than recovering a broken repository.</p>
+<p class="pw-post-body-paragraph">With that said, here is the first example, written directly in the article as a code block rather than embedded from GitHub, the way Medium shows code typed into the editor.</p>
+<pre class="lq lr ls lt lu md me mf bp mg bb bk"><span id="a1b2" class="mh fp fq me b bg mi mj l mk ml" data-code-block-mode="1" spellcheck="false" data-code-block-lang="python"><span class="hljs-keyword">import</span> os<br><br><span class="hljs-keyword">def</span> <span class="hljs-title function_">main</span>():<br>    path = os.getcwd()<br>    <span class="hljs-built_in">print</span>(<span class="hljs-string">f"Working in <span class="hljs-subst">{path}</span>"</span>)<br><br><span class="hljs-keyword">if</span> __name__ == <span class="hljs-string">"__main__"</span>:<br>    main()</span></pre>
+<p class="pw-post-body-paragraph">The second example comes from a GitHub Gist. Medium shows Gists inside a frame that points at its own media pages, which is why most reader modes lose them entirely.</p>
+<figure class="mm mn mo mp mq mr"><div class="ms mt"><iframe src="/test/media/aaaabbbbccccdddd0000111122223333/" allowfullscreen="" frameborder="0" height="420" width="680" title="git-author-rewrite.sh" class="ew n ff dz bg" scrolling="no"></iframe></div></figure>
+<p class="pw-post-body-paragraph">Here is another Gist further down the page. The site loads this frame only when you scroll to it, so Reader has to fetch the code itself, straight from GitHub.</p>
+<figure class="mm mn mo mp mq mr"><div class="ms mt"><iframe data-src="/test/media/eeeeffff000011112222333344445555/" allowfullscreen="" frameborder="0" height="200" width="680" title="hello_world.rb" class="ew n ff dz bg lazy-embed" scrolling="no"></iframe></div></figure>
+<p class="pw-post-body-paragraph">Medium wraps videos the same way, through its media pages and an Embedly player. This one is the very first video ever uploaded to YouTube.</p>
+<figure class="mm mn mo mp mq mr"><div class="ms mt"><iframe src="/test/media/99998888777766665555444433332222/" allowfullscreen="" frameborder="0" height="480" width="680" title="Me at the zoo" class="ew n ff dz bg" scrolling="no"></iframe></div><figcaption>The first YouTube video.</figcaption></figure>
+<p class="pw-post-body-paragraph">Personal blogs usually embed Gists with GitHub's script tag instead, which draws the code right into the page. Reader should treat both the same way.</p>
+<div class="post-embed"><script src="https://gist.github.com/octocat/2a6851cde24cdaf4b85b.js"></script></div>
+<p class="pw-post-body-paragraph">Documentation sites often use Pygments, which puts line numbers in a separate column. Copying should give you only the code, never the numbers.</p>
+<div class="highlight-bash notranslate"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal">1</span>
+<span class="normal">2</span>
+<span class="normal">3</span></pre></div></td><td class="code"><div class="highlight"><pre><span></span><span class="nb">set</span> -euo pipefail
+<span class="nv">BRANCH</span><span class="o">=</span><span class="k">$(</span>git rev-parse --abbrev-ref HEAD<span class="k">)</span>
+<span class="nb">echo</span> <span class="s2">"On </span><span class="nv">$BRANCH</span><span class="s2">"</span>
+</pre></div></td></tr></table></div>
+<p class="pw-post-body-paragraph">Prism adds its own line numbers inside the code element. These are drawn with CSS, so they are not part of the text, but the empty markup still has to go.</p>
+<pre class="language-javascript line-numbers"><code class="language-javascript"><span class="token keyword">const</span> sum <span class="token operator">=</span> <span class="token punctuation">(</span><span class="token parameter">a<span class="token punctuation">,</span> b</span><span class="token punctuation">)</span> <span class="token operator">=&gt;</span> a <span class="token operator">+</span> b<span class="token punctuation">;</span>
+console<span class="token punctuation">.</span><span class="token function">log</span><span class="token punctuation">(</span><span class="token function">sum</span><span class="token punctuation">(</span><span class="token number">2</span><span class="token punctuation">,</span> <span class="token number">3</span><span class="token punctuation">)</span><span class="token punctuation">)</span><span class="token punctuation">;</span>
+<span aria-hidden="true" class="line-numbers-rows"><span></span><span></span></span></code></pre>
+<p class="pw-post-body-paragraph">Finally, inline code such as <code>git status</code> or <code>npm test</code> stays inside the sentence where it belongs, with no header or button of its own.</p>
+<p class="pw-post-body-paragraph">That is all five. Keep them somewhere you can find them, and resist the urge to make them clever. Future you will be grateful for every boring line.</p>
+</div></article>
+<footer>Sign up for our newsletter · More from Medium</footer>
+<script src="/test/harness.js"></script>
+</body></html>

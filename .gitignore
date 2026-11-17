@@ -1,0 +1,4 @@
+node_modules/
+# Saved copies of real news pages, used only for local testing (not ours to publish)
+test/local/
+.claude/settings.local.json
