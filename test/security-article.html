@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Reader must never run page code | Test</title>
+  <meta name="description" content="A test page with hostile markup that Reader must neutralise.">
+  <!-- Structured data with HTML inside: Reader may use its words, never its markup. -->
+  <script type="application/ld+json">
+  {"@type":"NewsArticle","headline":"Reader must never run page code","articleBody":"<p>Structured paragraph one explains that the full text of this article is longer than what the page shows, which is why Reader prefers it. It goes on for a while so that it is long enough to be chosen over the visible text, and it talks about nothing in particular, just filling space with ordinary sentences about reading.</p><iframe data-rv-embed=\"video\" srcdoc=\"<script>parent.__pwned = 'srcdoc'<\/script>\"></iframe><p>Structured paragraph two keeps going in the same calm way, describing quiet afternoons, long books and the pleasure of a page without clutter. It needs to be long, so here are a few more sentences about libraries, lamps and the sound of rain on a window while someone reads.</p><img src=x onerror=\"parent.__pwned='onerror'\"><p>Structured paragraph three wraps things up with a short note about how a reading mode should show words and pictures and nothing else, because anything more is a risk. A final sentence makes sure that this text is clearly the longest version available on the page.</p><a href=\"java&#9;script:parent.__pwned='link'\">a sneaky link</a><p>Structured paragraph four adds a little more length for good measure so the structured body is comfortably more than half again as long as the visible article on the page.</p>"}
+  </script>
+</head>
+<body>
+  <article>
+    <h1>Reader must never run page code</h1>
+    <p>This visible paragraph is short on purpose. The structured data above carries a longer version with hostile markup inside it, and Reader should keep only the words.</p>
+    <p>A footnote reference<a href="#fn1" id="ref1">[1]</a> should scroll inside Reader instead of moving the page underneath.</p>
+    <p>Here is a <a href=" javascript:parent.__pwned='visible-link'">link with a hidden script address</a> and an <a href="https://example.com/">ordinary link</a>.</p>
+    <object data="data:text/html,<script>parent.__pwned='object'</script>"></object>
+    <svg width="10" height="10"><a><animate attributeName="href" values="javascript:parent.__pwned='svg'"/><rect width="10" height="10"/></a></svg>
+    <p id="fn1">[1] The footnote text sits at the end of the article.</p>
+  </article>
+  <script src="/test/harness.js"></script>
+</body>
+</html>

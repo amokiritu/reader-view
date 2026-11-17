@@ -3,8 +3,14 @@
   "name": "Reader View",
   "version": "0.1.0",
   "description": "Read articles in a clean, distraction-free view with adjustable text size, fonts and themes.",
-  "permissions": ["scripting", "storage"],
-  "host_permissions": ["<all_urls>"],
+  "homepage_url": "https://github.com/amokiritu/reader-view",
+  "permissions": [
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "background": {
     "service_worker": "src/background.js"
   },
@@ -25,21 +31,24 @@
   },
   "commands": {
     "_execute_action": {
-      "suggested_key": { "default": "Alt+Shift+R" },
+      "suggested_key": {
+        "default": "Alt+Shift+R"
+      },
       "description": "Show or hide Reader"
     }
   },
   "content_scripts": [
     {
-      "matches": ["http://*/*", "https://*/*", "file:///*"],
-      "js": ["vendor/Readability-readerable.js", "src/detect.js"],
+      "matches": [
+        "http://*/*",
+        "https://*/*",
+        "file:///*"
+      ],
+      "js": [
+        "vendor/Readability-readerable.js",
+        "src/detect.js"
+      ],
       "run_at": "document_idle"
-    }
-  ],
-  "web_accessible_resources": [
-    {
-      "resources": ["src/reader.css"],
-      "matches": ["<all_urls>"]
     }
   ]
 }

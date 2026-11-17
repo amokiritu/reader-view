@@ -7,15 +7,24 @@
   const WATCH_MS = 30000; // keep watching for late-arriving article text this long
   let lastResult = null;
   let autoOpened = false;
+  let urlTimer = null;
 
   // The browser's light/dark setting, so the toolbar icon can use light lines on dark toolbars.
   const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
   const readerOpen = () => !!(window.__readerView && window.__readerView.isOpen && window.__readerView.isOpen());
 
+  // After the extension is updated or removed, this old copy can't reach it any more: stop.
+  const orphaned = () => !(chrome.runtime && chrome.runtime.id);
+
   async function check(force = false) {
-    // While Reader is showing, the button is already on; don't reset its icon.
-    if (readerOpen()) return;
+    if (orphaned()) return shutDown();
+    // While Reader is showing, keep the button on (the browser may have reset it, e.g. when
+    // the site changed its address or the page came back from the back/forward cache).
+    if (readerOpen()) {
+      if (force) chrome.runtime.sendMessage({ type: "reader-state", active: true, dark: darkQuery.matches }).catch(() => {});
+      return;
+    }
     let ok = false;
     try {
       ok = isProbablyReaderable(document, { minContentLength: 140, minScore: 20 });
@@ -76,7 +85,8 @@
   // Single-page apps: re-check after in-page navigation, and always report the result,
   // since the button was reset when the address changed.
   let lastUrl = location.href;
-  setInterval(() => {
+  urlTimer = setInterval(() => {
+    if (orphaned()) return shutDown();
     if (location.href !== lastUrl) {
       lastUrl = location.href;
       autoOpened = false;
@@ -86,4 +96,9 @@
       }, 800);
     }
   }, 1000);
+
+  function shutDown() {
+    stopWatching();
+    clearInterval(urlTimer);
+  }
 })();

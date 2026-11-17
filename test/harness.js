@@ -3,6 +3,12 @@
 const HARNESS_ORIGIN = new URL(document.currentScript.src).origin;
 (async () => {
   const mem = {};
+  // ?theme=night&font=georgia&zoom=110&sidebar=0 preset Reader's settings; ?open=1 opens Reader on load
+  // (handy for screenshots).
+  const params = new URLSearchParams(location.search);
+  for (const k of ["theme", "font"]) if (params.has(k)) mem[k] = params.get(k);
+  if (params.has("zoom")) mem.zoom = Number(params.get("zoom"));
+  if (params.has("sidebar")) mem.sidebar = params.get("sidebar") !== "0";
   window.chrome = window.chrome || {};
   chrome.runtime = {
     getURL: (p) => HARNESS_ORIGIN + "/" + p + "?t=" + Date.now(),
@@ -93,6 +99,11 @@ const HARNESS_ORIGIN = new URL(document.currentScript.src).origin;
   btn.style.cssText = "position:fixed;top:8px;right:8px;z-index:10;padding:8px 12px";
   btn.onclick = () => window.__readerView.toggle();
   document.body.append(btn);
+  if (params.has("shot")) btn.remove(); // clean screenshots of the page itself
+  if (params.get("open") === "1") {
+    btn.remove();
+    window.__readerView.open();
+  }
   document.addEventListener("keydown", (e) => {
     if (e.altKey && e.shiftKey && e.code === "KeyR") window.__readerView.toggle();
   });

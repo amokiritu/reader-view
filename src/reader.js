@@ -54,8 +54,13 @@
 
   function loadStylesheet() {
     if (!sheetPromise) {
-      sheetPromise = fetch(chrome.runtime.getURL("src/reader.css"))
-        .then((r) => r.text())
+      // Asked from the background worker, so the file needn't be visible to websites
+      // (which could otherwise use it to detect the extension). The test harness has no
+      // worker and loads the file directly.
+      sheetPromise = chrome.runtime
+        .sendMessage({ type: "get-css" })
+        .catch(() => null)
+        .then((css) => (typeof css === "string" ? css : fetch(chrome.runtime.getURL("src/reader.css")).then((r) => r.text())))
         .then((css) => {
           const sheet = new CSSStyleSheet();
           sheet.replaceSync(css);
@@ -73,12 +78,21 @@
     } catch {}
   }
 
+  // Browser sync allows only ~120 writes a minute, so holding Ctrl+= mustn't write each step.
+  let saveTimer = null;
+  let lastSaved = "";
   function saveSettings() {
-    try {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
       const out = {};
       for (const k of SETTING_KEYS) out[k] = settings[k];
-      chrome.storage.sync.set(out);
-    } catch {}
+      const json = JSON.stringify(out);
+      if (json === lastSaved) return;
+      lastSaved = json;
+      try {
+        chrome.storage.sync.set(out).catch((err) => console.warn("Reader: could not save settings", err));
+      } catch {}
+    }, 400);
   }
 
   async function getAutoHosts() {
@@ -248,7 +262,7 @@
   // drops most iframes and strips the classes that mark posts, so we turn every embed into a
   // plain iframe tagged with data-rv-embed (data attributes survive Readability) beforehand.
   const EMBED_RE =
-    /\/\/((www\.)?(youtube(-nocookie)?\.com\/embed\/|player\.vimeo\.com\/video\/|dailymotion\.com\/embed\/)|platform\.(twitter|x)\.com\/embed\/|embed\.bsky\.app\/embed\/|player\.twitch\.tv\/|(archive|upload\.wikimedia)\.org\/)/i;
+    /^https?:\/\/((www\.)?(youtube(-nocookie)?\.com\/embed\/|dailymotion\.com\/embed\/|archive\.org\/embed\/)|player\.vimeo\.com\/video\/|platform\.(twitter|x)\.com\/embed\/|embed\.bsky\.app\/embed\/|player\.twitch\.tv\/|upload\.wikimedia\.org\/)/i;
 
   function embedKind(src) {
     if (!src || !EMBED_RE.test(src)) return "";
@@ -339,7 +353,7 @@
   // After extraction: make the kept embeds behave (sizes, fullscreen) and drop any other iframe.
   function finishEmbeds(frag) {
     for (const f of [...frag.querySelectorAll("iframe")]) {
-      const kind = f.getAttribute("data-rv-embed") || embedKind(f.getAttribute("src"));
+      const kind = embedKind(f.getAttribute("src"));
       if (!kind) {
         f.remove();
         continue;
@@ -349,7 +363,7 @@
       f.setAttribute("allowfullscreen", "");
       f.setAttribute("loading", "lazy");
       f.setAttribute("title", kind === "video" ? "Embedded video" : kind === "x" ? "Post on X" : "Post on Bluesky");
-      for (const a of ["width", "height", "style", "frameborder", "scrolling"]) f.removeAttribute(a);
+      for (const a of ["width", "height", "style", "frameborder", "scrolling", "srcdoc", "name"]) f.removeAttribute(a);
       if (kind !== "video") {
         // Posts size themselves via postMessage once loaded; start from the size on the page.
         const h = parseInt(f.getAttribute("data-rv-height"), 10);
@@ -621,8 +635,10 @@
     }
     if (replacement.length) block.replaceWith(...replacement);
     else block.remove();
-    // Lets the reading-position restore re-anchor now that the text above has moved.
-    if (ui) ui.content.dispatchEvent(new Event("load"));
+    // Lets the reading-position restore re-anchor now that the text above has moved
+    // (capture listeners on the content see it even though "load" doesn't bubble).
+    const first = replacement[0];
+    if (first && first.isConnected) first.dispatchEvent(new Event("load"));
   }
 
   async function copyCode(button) {
@@ -804,6 +820,12 @@
   function dekFromDescription(article, frag) {
     const ex = (article.excerpt || "").trim();
     if (ex.length < 30 || ex.length > 400) return "";
+    // Without description metadata, Readability's excerpt is just the first paragraph, which
+    // is often the byline ("By Maya Okafor · November 2"), not a subtitle.
+    const hasDescription = document.querySelector(
+      'meta[name="description" i][content], meta[property="og:description"][content], meta[name="twitter:description"][content]'
+    );
+    if (!hasDescription || /^by\s/i.test(ex)) return "";
     const key = norm(ex);
     const firstP = norm(frag.querySelector("p")?.textContent);
     if (firstP && firstP.startsWith(key.slice(0, 50))) return "";
@@ -875,7 +897,12 @@
 
     const fig = document.createElement("figure");
     const img = document.createElement("img");
-    img.src = new URL(src, location.href).href;
+    try {
+      img.src = new URL(src, location.href).href;
+    } catch {
+      return; // unusable address
+    }
+    if (!/^(https?:|data:image\/)/i.test(img.src)) return;
     img.alt = alt || "";
     // Keep every size the site offers so the browser picks a sharp one for the card width.
     const srcset = best && (best.getAttribute("srcset") || best.closest("picture")?.querySelector("source[srcset]")?.getAttribute("srcset"));
@@ -935,13 +962,19 @@
     const extractedLen = (frag.textContent || "").replace(/\s+/g, " ").trim().length;
     if (ldBody.length > 800 && ldBody.length > extractedLen * 1.4) {
       const lead = frag.querySelector("figure, picture, img");
-      const body = /<p[\s>]/i.test(ldBody)
-        ? (() => {
-            const t = document.createElement("template");
-            t.innerHTML = ldBody;
-            return t.content;
-          })()
-        : paragraphsFromText(ldBody);
+      // Some sites put HTML in this text. Use only its words: page data that was harmless
+      // inside a <script> tag must never become live markup in Reader.
+      let text = ldBody;
+      if (/<p[\s>]/i.test(ldBody)) {
+        const t = document.createElement("template");
+        t.innerHTML = ldBody;
+        text = [...t.content.querySelectorAll("p, h2, h3, h4, li, blockquote")]
+          .filter((n) => !n.parentElement || !n.parentElement.closest("p, li, blockquote"))
+          .map((n) => n.textContent.replace(/\s+/g, " ").trim())
+          .filter(Boolean)
+          .join("\n\n");
+      }
+      const body = paragraphsFromText(text);
       frag.replaceChildren();
       if (lead) frag.append(lead);
       frag.append(body);
@@ -967,14 +1000,33 @@
     return { ...article, fragment: frag };
   }
 
+  const ACTIVE_ELEMENTS =
+    "script, style, link, noscript, object, embed, applet, frame, frameset, meta, base, template, input, textarea, select, animate, set, animateTransform, animateMotion, foreignObject";
+  const DANGEROUS_ATTRS = new Set(["srcdoc", "formaction", "action", "form", "autofocus", "http-equiv"]);
+  const URL_ATTRS = new Set(["href", "src", "xlink:href", "poster", "data", "background", "cite", "longdesc"]);
+
+  // Web addresses only. Images may also be inline data images (lazy-load placeholders).
+  function safeUrl(value, tag, attr) {
+    const v = String(value).replace(/[\u0000-\u0020\u007f-\u009f]/g, "");
+    const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(v);
+    if (!scheme) return true; // relative address
+    const s = scheme[1].toLowerCase();
+    if (s === "http" || s === "https") return true;
+    if ((s === "mailto" || s === "tel") && attr === "href") return true;
+    return s === "data" && attr === "src" && (tag === "IMG" || tag === "SOURCE") && /^data:image\/(png|gif|jpe?g|webp|avif|svg\+xml)[;,]/i.test(v);
+  }
+
   // Cleanup shared by the first page and any later pages of a multi-page article.
   function sanitizeFragment(frag, title) {
-    // Hygiene: no inline handlers or javascript: URLs in the reader copy.
-    frag.querySelectorAll("script, style, link, noscript").forEach((n) => n.remove());
+    // Nothing in the Reader copy may run code: drop active elements, event handlers, inline
+    // frame documents and any link or source that isn't plain web content.
+    frag.querySelectorAll(ACTIVE_ELEMENTS).forEach((n) => n.remove());
+    frag.querySelectorAll("form").forEach((f) => f.replaceWith(...f.childNodes));
     frag.querySelectorAll("*").forEach((n) => {
       for (const a of [...n.attributes]) {
-        if (/^on/i.test(a.name)) n.removeAttribute(a.name);
-        else if (/^(href|src|xlink:href)$/i.test(a.name) && /^\s*javascript:/i.test(a.value)) n.removeAttribute(a.name);
+        const name = a.name.toLowerCase();
+        if (name.startsWith("on") || DANGEROUS_ATTRS.has(name)) n.removeAttribute(a.name);
+        else if (URL_ATTRS.has(name) && !safeUrl(a.value, n.tagName, name)) n.removeAttribute(a.name);
       }
     });
 
@@ -1075,13 +1127,14 @@
   }
 
   async function appendFollowingPages(title, firstText) {
+    const session = ui; // a later Reader session must not receive this one's results
     let href = location.href;
     let doc = document;
     let num = currentPageNumber(href);
     const seenUrls = new Set([href.split("#")[0]]);
     const seenText = new Set([firstText]);
 
-    for (let i = 0; i < MAX_PAGES - 1 && ui; i++) {
+    for (let i = 0; i < MAX_PAGES - 1 && ui === session; i++) {
       const next = findNextPageUrl(doc, href, num + 1);
       if (!next || seenUrls.has(next)) break;
       seenUrls.add(next);
@@ -1095,7 +1148,7 @@
       } catch {
         break;
       }
-      if (!ui) return;
+      if (ui !== session) return;
 
       const nextDoc = new DOMParser().parseFromString(html, "text/html");
       const base = nextDoc.createElement("base");
@@ -1127,7 +1180,7 @@
       href = followHref;
       num += 1;
     }
-    setPageLoader("");
+    if (ui === session) setPageLoader("");
   }
 
   function setPageLoader(text) {
@@ -1518,7 +1571,8 @@
   }
 
   async function startSummary() {
-    if (!ui) return;
+    const session = ui; // a later Reader session must not receive this one's results
+    if (ui !== session) return;
     const text = articleText();
     if (text.split(/\s+/).length < SUMMARY_MIN_WORDS) return;
     ui.hasSummary = true;
@@ -1526,7 +1580,7 @@
 
     const key = summaryKey();
     const cached = await cachedSummary(key);
-    if (!ui) return;
+    if (ui !== session) return;
     if (cached) return showSummary(cached.text, "ai");
 
     const AI = globalThis.Summarizer;
@@ -1536,7 +1590,7 @@
         status = await AI.availability(AI_OPTIONS);
       } catch {}
     }
-    if (!ui) return;
+    if (ui !== session) return;
 
     if (status === "available") {
       showSummary("", "Summarizing…");
@@ -1563,23 +1617,25 @@
 
   // Chrome only allows the model download after a click on the page, hence the button.
   async function downloadAndSummarize(text, key) {
+    const session = ui; // a later Reader session must not receive this one's results
     const a = ui.summary.action;
     a.disabled = true;
     a.textContent = "Preparing on-device AI…";
     try {
       await runAiSummary(text, key, (p) => {
-        if (ui) a.textContent = `Downloading on-device AI… ${Math.round(p * 100)}%`;
+        if (ui === session) a.textContent = `Downloading on-device AI… ${Math.round(p * 100)}%`;
       });
-      if (ui) setSummaryAction("");
+      if (ui === session) setSummaryAction("");
     } catch (err) {
       console.warn("Reader: could not set up on-device AI", err);
-      if (!ui) return;
+      if (ui !== session) return;
       setSummaryAction("");
       ui.summary.note.textContent = NOTE_KEY + " Chrome's on-device AI isn't available on this computer.";
     }
   }
 
   async function runAiSummary(text, key, onProgress) {
+    const session = ui; // a later Reader session must not receive this one's results
     const summarizer = await globalThis.Summarizer.create({
       ...AI_OPTIONS,
       monitor(m) {
@@ -1588,12 +1644,12 @@
     });
     try {
       const input = await fitToQuota(summarizer, text);
-      if (!ui) return;
+      if (ui !== session) return;
       let out = "";
       if (typeof summarizer.summarizeStreaming === "function") {
         showSummary("", "Summarizing…");
         for await (const chunk of summarizer.summarizeStreaming(input)) {
-          if (!ui) return;
+          if (ui !== session) return;
           // Older Chrome versions stream the whole text so far; newer ones stream only new text.
           out = chunk.startsWith(out) ? chunk : out + chunk;
           ui.summary.text.textContent = out;
@@ -1758,19 +1814,20 @@
   }
 
   async function restorePosition() {
+    const session = ui; // a later Reader session must not receive this one's results
     let pos = null;
     try {
       const { [POS_KEY]: all = {} } = await chrome.storage.local.get(POS_KEY);
-      pos = all[ui ? ui.posKey : ""] || null;
+      pos = all[session.posKey] || null;
     } catch {}
-    if (!ui) return;
+    if (ui !== session) return;
     if (pos) {
       if (!applyPosition(pos)) ui.posPending = pos;
       // Photos above the spot load after this and push the text down. Hold the place for a
       // few seconds as they arrive, unless the reader starts scrolling themselves.
       const until = Date.now() + 4000;
       const hold = () => {
-        if (!ui || ui.userScrolled || Date.now() > until) return ui && ui.content.removeEventListener("load", hold, true);
+        if (ui !== session || ui.userScrolled || Date.now() > until) return session.content.removeEventListener("load", hold, true);
         if (applyPosition(pos)) ui.posPending = null;
       };
       ui.content.addEventListener("load", hold, true);
@@ -1803,9 +1860,13 @@
   // Reader takes a moment to build (styles, extraction, layout). Listen for Esc from
   // the very first moment so a quick "open, then Esc" cancels instead of being lost.
   let opening = null;
+  let pendingFinish = null; // the previous Reader's fade-out, if it hasn't finished yet
 
   async function open() {
     if (ui || opening) return;
+    // Reopened while the last Reader is still fading out: finish closing it first, so its
+    // page settings (scrolling, focus) are restored before this one saves them.
+    if (pendingFinish) pendingFinish();
     const state = { cancelled: false };
     opening = state;
     const onEarlyKey = (e) => {
@@ -1872,6 +1933,17 @@
     built.content.addEventListener("click", (e) => {
       const copyBtn = e.target.closest && e.target.closest(".code-copy");
       if (copyBtn) return copyCode(copyBtn);
+      const jump = e.target.closest && e.target.closest('a[href^="#"]');
+      if (jump) {
+        e.preventDefault();
+        let id = "";
+        try {
+          id = decodeURIComponent(jump.getAttribute("href").slice(1));
+        } catch {}
+        const target = id && (built.content.querySelector(`[id="${CSS.escape(id)}"]`) || built.content.querySelector(`a[name="${CSS.escape(id)}"]`));
+        if (target) target.scrollIntoView({ block: "start" });
+        return;
+      }
       const img = e.target.closest && e.target.closest("img");
       if (!img) return;
       e.preventDefault();
@@ -2042,6 +2114,7 @@
     // Pull in the rest of a multi-page article in the background.
     const firstText = norm(built.content.textContent).slice(0, 200);
     // Then summarize the whole article (all pages).
+    const session = ui;
     appendFollowingPages(article.title, firstText)
       .catch((err) => {
         console.warn("Reader: could not load following pages", err);
@@ -2049,9 +2122,9 @@
       })
       .then(() => {
         // The saved spot may be on a page that only just arrived.
-        if (ui && ui.posPending && !ui.userScrolled && applyPosition(ui.posPending)) ui.posPending = null;
+        if (ui === session && ui.posPending && !ui.userScrolled && applyPosition(ui.posPending)) ui.posPending = null;
       })
-      .then(() => startSummary())
+      .then(() => ui === session && startSummary())
       .catch((err) => console.warn("Reader: summary failed", err));
   }
 
@@ -2070,6 +2143,7 @@
     reader.classList.add("leaving");
 
     const finish = () => {
+      if (pendingFinish === finish) pendingFinish = null;
       host.remove();
       printStyle.remove();
       document.documentElement.style.setProperty("overflow", prev.htmlOverflow, prev.htmlPriority);
@@ -2077,7 +2151,8 @@
       if (prev.activeElement && prev.activeElement.focus) prev.activeElement.focus({ preventScroll: true });
     };
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    reduced ? finish() : setTimeout(finish, 220);
+    pendingFinish = finish;
+    reduced ? finish() : setTimeout(() => pendingFinish === finish && finish(), 220);
     notifyState(false);
   }
 

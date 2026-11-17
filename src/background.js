@@ -6,10 +6,10 @@
 importScripts("code-fetch.js");
 
 const ICON = {
-  idle: { 16: "icons/reader-16.png", 32: "icons/reader-32.png", 48: "icons/reader-48.png", 128: "icons/reader-128.png" },
+  idle: { 16: "/icons/reader-16.png", 32: "/icons/reader-32.png", 48: "/icons/reader-48.png", 128: "/icons/reader-128.png" },
   // Light lines for dark toolbars (browser in dark mode), like Safari's Reader button.
-  idleOnDark: { 16: "icons/reader-ondark-16.png", 32: "icons/reader-ondark-32.png", 48: "icons/reader-ondark-48.png", 128: "icons/reader-ondark-128.png" },
-  active: { 16: "icons/reader-active-16.png", 32: "icons/reader-active-32.png", 48: "icons/reader-active-48.png", 128: "icons/reader-active-128.png" },
+  idleOnDark: { 16: "/icons/reader-ondark-16.png", 32: "/icons/reader-ondark-32.png", 48: "/icons/reader-ondark-48.png", 128: "/icons/reader-ondark-128.png" },
+  active: { 16: "/icons/reader-active-16.png", 32: "/icons/reader-active-32.png", 48: "/icons/reader-active-48.png", 128: "/icons/reader-active-128.png" },
 };
 
 // Pages report the browser's light/dark setting (a service worker can't see it). Remembered for
@@ -90,6 +90,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   const tabId = sender.tab && sender.tab.id;
   if (!tabId) return;
   switch (msg.type) {
+    case "get-css":
+      // Reader's stylesheet, handed over directly so it needn't be exposed to websites.
+      fetch(chrome.runtime.getURL("src/reader.css"))
+        .then((r) => r.text())
+        .then(sendResponse, () => sendResponse(null));
+      return true;
     case "fetch-code":
       // Reader asks for a Gist (or Medium embed) the article only links to.
       resolveCode(msg.url, sender.tab.url || "").then(sendResponse, () => sendResponse(null));
