@@ -64,3 +64,8 @@ A Safari-Reader-style reading mode for Chrome (Manifest V3).
   Windows fonts when not installed.
 - After editing files, click the reload icon on the extension card in `chrome://extensions`
   and refresh the tab.
+
+## License
+
+MIT, see [LICENSE](LICENSE). Mozilla Readability in `vendor/` is Apache-2.0
+(see `vendor/Readability-LICENSE.md`).
