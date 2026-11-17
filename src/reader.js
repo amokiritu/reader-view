@@ -1454,6 +1454,22 @@
       el("label", { class: "auto" }, [autoBox, el("span", { text: `Use Reader automatically on “${location.hostname || "this site"}”` })]),
     ]);
 
+    // Copies installed from GitHub learn about new versions from the background worker.
+    try {
+      chrome.runtime
+        .sendMessage({ type: "update-info" })
+        .then((info) => {
+          if (!info || !info.version || !/^https:\/\/github\.com\//.test(info.url || "")) return;
+          popover.append(
+            el("a", { class: "update", href: info.url, target: "_blank", rel: "noopener noreferrer" }, [
+              el("span", { class: "update-dot", "aria-hidden": "true" }),
+              el("span", { text: `Reader View ${info.version} is available. Download it` }),
+            ])
+          );
+        })
+        .catch(() => {});
+    } catch {}
+
     return { popover, smaller, larger, zoomLabel, themeButtons, fontButtons };
   }
 

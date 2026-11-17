@@ -62,9 +62,12 @@ Open any news article or blog post and click the Reader button.
 
 ### Updating
 
-Download the new zip and unzip it **into the same folder**, replacing the old files. Then
-open the extensions page and click the reload arrow on the Reader View card. Your settings and
-reading positions are kept.
+Reader View tells you when a new version is out: a small blue arrow appears on its button, and
+the **Aa** menu shows a download link. (It checks GitHub once a day.)
+
+To update, download the new zip and unzip it **into the same folder**, replacing the old files.
+Then open the extensions page and click the reload arrow on the Reader View card. Your settings
+and reading positions are kept.
 
 ### Install from source
 
@@ -106,10 +109,12 @@ Reader View has no servers, accounts, analytics or ads. Everything happens in yo
 - **Stored on your computer:** reading positions (last 300 articles) and AI summaries.
 - **Synced by your browser** (if you use browser sync): theme, font, zoom, panel setting and
   your "use automatically" sites.
-- **Network requests Reader makes itself**, only while Reader is open:
-  - the next pages of a multi-page article, from the same website;
-  - GitHub Gists that the page shows but hadn't loaded yet, from GitHub;
-  - Medium's own embed pages for Gists and videos, from the same site.
+- **Network requests Reader makes itself**:
+  - while Reader is open: the next pages of a multi-page article (from the same website),
+    GitHub Gists the page shows but hadn't loaded yet (from GitHub), and Medium's own embed
+    pages for Gists and videos (from the same site);
+  - once a day: a check with GitHub for a newer version of Reader View. Nothing about you or
+    your browsing is sent.
 - **Embedded videos and posts** (YouTube, Vimeo, X, Bluesky) load from those services, just as
   they do on the original page.
 

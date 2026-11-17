@@ -774,6 +774,20 @@ img.lead-media,
 }
 .auto input { margin: 2px 0 0; accent-color: var(--accent); }
 
+.update {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 2px 2px;
+  padding: 8px;
+  border-top: 1px solid var(--pop-rule);
+  color: var(--accent);
+  text-decoration: none;
+  line-height: 1.35;
+}
+.update:hover { text-decoration: underline; }
+.update-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+
 /* ---------- "not available" toast ---------- */
 
 .reader.toast-only { background: transparent; pointer-events: none; }

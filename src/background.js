@@ -28,15 +28,75 @@ async function updateScheme(dark) {
   chrome.action.setIcon({ path: darkMode ? ICON.idleOnDark : ICON.idle }).catch(() => {});
 }
 
+// ---------- "new version available" (copies installed from GitHub) ----------
+// Store copies update themselves (the store adds update_url to the manifest). Copies installed
+// from the GitHub zip can't, so once a day ask GitHub for the latest release and, if it's
+// newer, show an arrow on the button and a link in Reader's Aa menu.
+const REPO_RELEASES = "https://github.com/amokiritu/reader-view/releases/latest";
+const RELEASES_API = "https://api.github.com/repos/amokiritu/reader-view/releases/latest";
+const UPDATE_CHECK_EVERY = 24 * 60 * 60 * 1000;
+const fromStore = "update_url" in chrome.runtime.getManifest();
+let update = null; // { version, url } while a newer release exists
+
+function isNewer(a, b) {
+  const pa = a.split(".").map((n) => parseInt(n, 10) || 0);
+  const pb = b.split(".").map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d) return d > 0;
+  }
+  return false;
+}
+
+function applyUpdateInfo(info) {
+  const current = chrome.runtime.getManifest().version;
+  update = !fromStore && info && info.version && isNewer(info.version, current) ? info : null;
+  chrome.action.setBadgeText({ text: update ? "↑" : "" }).catch(() => {});
+  if (update) {
+    chrome.action.setBadgeBackgroundColor({ color: "#007aff" }).catch(() => {});
+    if (chrome.action.setBadgeTextColor) chrome.action.setBadgeTextColor({ color: "#ffffff" }).catch(() => {});
+  }
+}
+
+const updateLoaded = chrome.storage.local
+  .get("update")
+  .then((r) => applyUpdateInfo(r.update))
+  .catch(() => {});
+
+async function checkForUpdate(force = false) {
+  if (fromStore) return;
+  try {
+    const { updateCheckedAt = 0 } = await chrome.storage.local.get("updateCheckedAt");
+    if (!force && Date.now() - updateCheckedAt < UPDATE_CHECK_EVERY) return;
+    await chrome.storage.local.set({ updateCheckedAt: Date.now() });
+    const res = await fetch(RELEASES_API, { credentials: "omit", headers: { Accept: "application/vnd.github+json" } });
+    if (!res.ok) return;
+    const j = await res.json();
+    const version = String(j.tag_name || "").replace(/^v/i, "");
+    if (j.draft || j.prerelease || !/^\d+(\.\d+){0,3}$/.test(version)) return;
+    const url = /^https:\/\/github\.com\/amokiritu\/reader-view\//.test(j.html_url || "") ? j.html_url : REPO_RELEASES;
+    const info = { version, url };
+    await chrome.storage.local.set({ update: info });
+    applyUpdateInfo(info);
+  } catch {
+    // Offline or GitHub unavailable: try again next time.
+  }
+}
+
+chrome.runtime.onStartup.addListener(() => checkForUpdate());
+
 async function setTabState(tabId, { available, active }) {
   await schemeLoaded;
+  await updateLoaded;
   try {
     if (available) await chrome.action.enable(tabId);
     else await chrome.action.disable(tabId);
     await chrome.action.setIcon({ tabId, path: active ? ICON.active : darkMode ? ICON.idleOnDark : ICON.idle });
     await chrome.action.setTitle({
       tabId,
-      title: !available ? "Reader is unavailable for this page" : active ? "Hide Reader (Alt+Shift+R)" : "Show Reader (Alt+Shift+R)",
+      title:
+        (!available ? "Reader is unavailable for this page" : active ? "Hide Reader (Alt+Shift+R)" : "Show Reader (Alt+Shift+R)") +
+        (update ? ` · Version ${update.version} is available` : ""),
     });
   } catch {
     // Tab closed or not accessible.
@@ -62,6 +122,10 @@ async function runReader(tabId, mode) {
 // Disabled by default; detect.js enables it per tab when the page is readerable.
 chrome.runtime.onInstalled.addListener(async () => {
   await chrome.action.disable();
+  // Just installed or updated: forget an old notice if this is the new version, and check.
+  await updateLoaded;
+  chrome.storage.local.get("update").then((r) => applyUpdateInfo(r.update)).catch(() => {});
+  checkForUpdate(true);
   // Run detection in tabs that were already open before install/update.
   const tabs = await chrome.tabs.query({ url: ["http://*/*", "https://*/*", "file:///*"] });
   for (const tab of tabs) {
@@ -100,7 +164,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       // Reader asks for a Gist (or Medium embed) the article only links to.
       resolveCode(msg.url, sender.tab.url || "").then(sendResponse, () => sendResponse(null));
       return true; // answer arrives asynchronously
+    case "update-info":
+      updateLoaded.then(() => sendResponse(update));
+      return true;
     case "readerable":
+      checkForUpdate(); // at most once a day
       updateScheme(msg.dark).then(() => setTabState(tabId, { available: msg.ok, active: false }));
       break;
     case "reader-state":
