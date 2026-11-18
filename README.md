@@ -20,6 +20,8 @@ in the font, size and theme you like.
   your own computer.
 - **Multi-page articles** are joined into one page.
 - **Videos and posts stay in:** YouTube, Vimeo, X and Bluesky.
+- **Reviews read cleanly:** pros and cons, and the review's score, appear as one tidy box;
+  pull quotes look like pull quotes.
 - **Code stays readable:** code blocks and GitHub Gists (including Medium's) get a language
   label and a Copy button.
 - **Picks up where you left off:** reopen an article and Reader returns to the paragraph you
@@ -154,7 +156,8 @@ No build step: the extension runs straight from the repository.
 
 **Test pages without installing:** run `python -m http.server 8766` in the repository folder and
 open `http://localhost:8766/test/sample-article.html` (also `embeds-article.html`,
-`code-article.html`, `images-article.html`, `paywall-article.html`, `security-article.html`,
+`code-article.html`, `review-article.html`, `images-article.html`, `paywall-article.html`,
+`security-article.html`,
 `multipage/garden-guide.html`). URL options:
 
 - `?open=1` opens Reader on load.

@@ -420,16 +420,44 @@
       }
       if (/^[\w-]{11}$/.test(id || "")) replace(n, makeEmbed("video", `https://www.youtube.com/embed/${id}`));
     }
+
+    // Other placeholders (Tom's Guide and many more): a YouTube thumbnail with a short title and
+    // a play button, built by the site's own script. Swap the whole block for the player.
+    const thumbs = doc.body.querySelectorAll(
+      "[data-yt-video-token], img[src*='img.youtube.com/vi/'], img[src*='i.ytimg.com/vi/'], img[data-src*='ytimg.com/vi/'], img[data-src*='img.youtube.com/vi/']"
+    );
+    for (const n of [...thumbs]) {
+      if (!doc.body.contains(n)) continue;
+      const token = n.getAttribute("data-yt-video-token");
+      const m = /\/vi(?:_webp)?\/([\w-]{11})\//.exec(n.getAttribute("src") || n.getAttribute("data-src") || "");
+      const id = token || (m && m[1]);
+      if (!/^[\w-]{11}$/.test(id || "")) continue;
+      // Widen to the placeholder block: just the thumbnail, a title and a play button.
+      let block = n;
+      for (let i = 0; i < 4; i++) {
+        const p = block.parentElement;
+        if (!p || p === doc.body || norm(p.textContent).length > 160 || p.querySelector("p, h1, h2, h3, ul, ol, figure figure")) break;
+        if (p.querySelectorAll("img").length > 1) break;
+        block = p;
+      }
+      // A thumbnail inside a normal article photo or link list isn't a player.
+      if (block.tagName === "IMG" && block.closest("a:not([href*='youtu'])")) continue;
+      replace(block, makeEmbed("video", `https://www.youtube.com/embed/${id}`));
+    }
   }
 
   // After extraction: make the kept embeds behave (sizes, fullscreen) and drop any other iframe.
   function finishEmbeds(frag) {
+    const seen = new Set();
     for (const f of [...frag.querySelectorAll("iframe")]) {
       const kind = embedKind(f.getAttribute("src"));
-      if (!kind) {
+      // Pages sometimes carry the same video twice (a placeholder and a hidden player).
+      const key = youtubeId(f.getAttribute("src")) || (f.getAttribute("src") || "").split(/[?#]/)[0];
+      if (!kind || seen.has(key)) {
         f.remove();
         continue;
       }
+      seen.add(key);
       f.setAttribute("data-rv-embed", kind);
       f.setAttribute("allow", "autoplay; encrypted-media; picture-in-picture; fullscreen; clipboard-write");
       f.setAttribute("allowfullscreen", "");
@@ -831,7 +859,7 @@
 
   // Longer site boilerplate that sits at the end of articles.
   const SITE_PROMO =
-    /^(follow (topics|authors|this author|the author|us)\b|(follow topics and authors )?from this story to see more like this|get the latest .{0,60} (in|to) your inbox|sign up for (our|the) .{0,40}newsletter|this story (was|has been) updated|most popular\b|more from\b|you might also like\b)/i;
+    /^(follow (topics|authors|this author|the author|us)\b|(follow topics and authors )?from this story to see more like this|get the latest .{0,60} (in|to) your inbox|sign up for (our|the) .{0,40}newsletter|this story (was|has been) updated|most popular\b|more from\b|you might also like\b|why you can trust\b)/i;
 
   function removeJunk(frag) {
     // Site promos: remove the whole paragraph/block, not just the inner element that matched.
@@ -950,7 +978,9 @@
   // container Readability keeps. Like Safari, bring it back as the lead image.
   function addLeadImage(frag) {
     // Already starts with an image? Keep it.
-    const firstBlock = frag.querySelector("img, picture, video, iframe, figure, p, h2, h3, ul, ol, blockquote");
+    const firstBlock = [...frag.querySelectorAll("img, picture, video, iframe, figure, p, h2, h3, ul, ol, blockquote")].find(
+      (n) => !n.closest(".procon, .code-block")
+    );
     if (firstBlock && /^(IMG|PICTURE|VIDEO|IFRAME|FIGURE)$/.test(firstBlock.tagName)) return;
 
     // Locate the article's first paragraph on the live page.
@@ -1044,7 +1074,7 @@
   // Safari runs the first image edge to edge across the page card.
   function markLeadMedia(frag) {
     const first = frag.querySelector("img, picture, video, figure, p, h2, h3, h4, ul, ol, blockquote, pre, table");
-    if (!first) return;
+    if (!first || first.closest(".procon, .code-block")) return; // a scorecard or code, not a photo
     let media = null;
     if (/^(IMG|PICTURE|VIDEO|FIGURE)$/.test(first.tagName)) media = first.closest("figure") || first;
     else if (first.tagName === "P" && !first.textContent.trim() && first.querySelector("img, picture")) media = first;
@@ -1130,14 +1160,20 @@
       const spriteOnly = svg.querySelector("use") && !shapes.length;
       const parent = svg.parentElement;
       const besideText = parent && norm(parent.textContent).length > 0 && !svg.getAttribute("width") && !svg.getAttribute("height");
-      if (spriteOnly || besideText || !shapes.length) svg.remove();
+      // A drawing worth keeping has a fixed size of its own, or words in it (charts, diagrams).
+      const w = parseFloat(svg.getAttribute("width") || "");
+      const sized = /^\s*\d+(\.\d+)?\s*(px)?\s*$/.test(svg.getAttribute("width") || "") && w >= 100;
+      const labelled = svg.querySelector("text, title") || (svg.getAttribute("role") === "img" && svg.getAttribute("aria-label"));
+      if (spriteOnly || besideText || !shapes.length || (!sized && !labelled)) svg.remove();
     }
   }
 
   // Review scorecards: "Pros"/"Cons" (or "The Good"/"The Bad") labels, each followed by a
   // list. Show them as one tidy box with ✓ and ✕ marks instead of captions and loose lists.
-  const PRO_LABEL = /^(pros|the good|likes|what we like|we like|positives|strengths|pluses|the positives)\s*:?$/i;
-  const CON_LABEL = /^(cons|the bad|dislikes|what we don'?t like|we don'?t like|negatives|weaknesses|minuses|the negatives)\s*:?$/i;
+  const PRO_LABEL =
+    /^(pros|the good|likes|what we like|we like|positives|strengths|pluses|the positives|reasons to buy|buy it if|for)\s*:?$/i;
+  const CON_LABEL =
+    /^(cons|the bad|dislikes|what we don['’]?t like|we don['’]?t like|negatives|weaknesses|minuses|the negatives|reasons to avoid|reasons to skip|don['’]?t buy it if|skip it if|against)\s*:?$/i;
 
   function markProsCons(frag) {
     const doc = frag.ownerDocument || document;
@@ -1155,6 +1191,13 @@
       if (!list || !/^(UL|OL)$/.test(list.tagName) || host.hasAttribute("data-rv-procon-label")) continue;
       host.setAttribute("data-rv-procon-label", kind);
       list.setAttribute("data-rv-procon", kind);
+      // Sites put their own "+", "-" or "✓" before each item; Reader draws its own marks.
+      for (const li of list.children) {
+        const first = li.firstElementChild;
+        if (first && /^[+\-–—•·✓✔✗✘×xX]$/.test(first.textContent.trim()) && !first.querySelector("img")) first.remove();
+        const lead = li.firstChild;
+        if (lead && lead.nodeType === 3) lead.textContent = lead.textContent.replace(/^\s*[+\-–—•·✓✔✗✘×]\s+/, "");
+      }
       // Group the label and its list; widen to a wrapper that holds just the two.
       let unit = host.parentElement;
       if (!unit || unit === frag || [...unit.children].some((c) => c !== host && c !== list && norm(c.textContent))) {
@@ -1209,36 +1252,47 @@
   }
 
   function addRatingToProsCons(frag) {
-    const box = frag.querySelector(".procon");
-    if (!box) return;
-    // The site's score badge often survives as loose lines just above the box: "8",
-    // "Verge Score", "$699". Fold them into the box's top line instead.
-    const leaves = [...frag.querySelectorAll("p, div, span, h3, h4, h5")].filter(
-      (n) => !box.contains(n) && n.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING && !n.querySelector("p, div, img, picture, figure, ul, ol, h2, h3, h4, iframe")
-    );
-    let label = "";
-    let score = "";
-    let price = "";
-    const used = new Set();
-    for (const n of leaves.slice(-8).reverse()) {
-      const t = n.textContent.replace(/\s+/g, " ").trim();
-      if (!t || used.has(t)) {
-        if (t) n.remove(); // the same badge text repeated (wrapper and inner span, or two prices)
-        continue;
+    const boxes = [...frag.querySelectorAll(".procon")];
+    const rating = boxes.length ? reviewRating() : null;
+    const tidy = (t) => (t === t.toUpperCase() ? t[0] + t.slice(1).toLowerCase() : t).replace(/[\s:：]+$/, "");
+    boxes.forEach((box, index) => {
+      // The site's score badge often survives as loose lines just above the box: "8",
+      // "Verge Score", "$699" or "RATING : 8.3 / 10". Fold them into the box's top line.
+      const prev = index ? boxes[index - 1] : null;
+      const leaves = [...frag.querySelectorAll("p, div, span, h3, h4, h5")].filter(
+        (n) =>
+          !box.contains(n) &&
+          n.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING &&
+          !(prev && (prev.contains(n) || prev.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_PRECEDING)) &&
+          !n.querySelector("p, div, img, picture, figure, ul, ol, h2, h3, h4, iframe")
+      );
+      let label = "";
+      let score = "";
+      let price = "";
+      const used = new Set();
+      for (const n of leaves.slice(-8).reverse()) {
+        const t = n.textContent.replace(/\s+/g, " ").trim();
+        if (!t || used.has(t)) {
+          if (t) n.remove(); // the same badge text repeated (wrapper and inner span, or two prices)
+          continue;
+        }
+        used.add(t);
+        const full = /^(.{0,25}?)[\s:：]*(\d{1,3}(?:\.\d)?)\s*(?:\/|out of)\s*(\d{1,3})$/i.exec(t);
+        if (!score && full && (!full[1] || /\b(score|rating)\b/i.test(full[1]))) {
+          score = `${full[2]} / ${full[3]}`;
+          if (full[1] && !label) label = tidy(full[1]);
+        } else if (!score && /^\d{1,3}(\.\d)?$/.test(t)) score = t;
+        else if (!label && t.length < 30 && /\b(score|rating)\b/i.test(t)) label = tidy(t);
+        else if (!price && /^[$€£¥]\s?\d[\d,.]*$/.test(t)) price = t;
+        else break;
+        n.remove();
       }
-      used.add(t);
-      if (!score && /^\d{1,3}(\.\d)?$/.test(t)) score = t;
-      else if (!label && t.length < 30 && /\b(score|rating)\b/i.test(t)) label = t.replace(/[:：]\s*$/, "");
-      else if (!price && /^[$€£¥]\s?\d[\d,.]*$/.test(t)) price = t;
-      else break;
-      n.remove();
-    }
-    const r = reviewRating();
-    const parts = [];
-    if (r) parts.push(`${label || "Rating"}: `, el("strong", { text: `${r.value} / ${r.best}` }));
-    else if (score) parts.push(`${label || "Score"}: `, el("strong", { text: score }));
-    if (price) parts.push(parts.length ? ` · ${price}` : price);
-    if (parts.length) box.prepend(el("div", { class: "procon-rating" }, parts));
+      const parts = [];
+      if (score) parts.push(`${label || "Score"}: `, el("strong", { text: score }));
+      else if (index === 0 && rating) parts.push(`${label || "Rating"}: `, el("strong", { text: `${rating.value} / ${rating.best}` }));
+      if (price) parts.push(parts.length ? ` · ${price}` : price);
+      if (parts.length) box.prepend(el("div", { class: "procon-rating" }, parts));
+    });
   }
 
   // Cleanup shared by the first page and any later pages of a multi-page article.
