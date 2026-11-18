@@ -20,7 +20,10 @@ in the font, size and theme you like.
   your own computer.
 - **Multi-page articles** are joined into one page.
 - **Videos and posts stay in:** YouTube, Vimeo, X and Bluesky, including the video at the top
-  of a review.
+  of a review, and the videos in sites' own players (such as CNET's).
+- **Charts stay in:** Datawrapper and Flourish charts, and charts the page draws itself (such as
+  WSJ's), appear where the article has them.
+- **Photos that load as you scroll** are all there, on screen and when printed.
 - **Reviews read cleanly:** pros and cons, and the review's score, appear as one tidy box;
   pull quotes look like pull quotes.
 - **Code stays readable:** code blocks and GitHub Gists (including Medium's) get a language
@@ -118,8 +121,9 @@ Reader View has no servers, accounts, analytics or ads. Everything happens in yo
     pages for Gists and videos (from the same site);
   - once a day: a check with GitHub for a newer version of Reader View. Nothing about you or
     your browsing is sent.
-- **Embedded videos and posts** (YouTube, Vimeo, X, Bluesky) load from those services, just as
-  they do on the original page.
+- **Embedded videos and posts** (YouTube, Vimeo, X, Bluesky, and sites' own video players) load
+  from the same places as on the original page. A video in a site's own player downloads only
+  when you play it.
 
 ### Permissions
 
@@ -150,7 +154,7 @@ No build step: the extension runs straight from the repository.
 | `src/reader.js` | Extracts the article with Readability and draws Reader in a shadow DOM |
 | `src/reader.css` | Typography, themes, the Aa menu |
 | `src/code-fetch.js` | Background helper that fetches Gists and Medium embed pages |
-| `vendor/` | Mozilla Readability 0.6 (Apache-2.0). `npm install` refreshes it |
+| `vendor/` | Mozilla Readability 0.6 and hls.js (both Apache-2.0), which plays sites' streaming videos. `npm install` refreshes them |
 | `test/` | Test pages, a harness that runs Reader in a normal tab, and automated checks (`check.js`) |
 
 **Try changes:** after editing, click the reload arrow on the extension card and refresh the tab.
@@ -159,7 +163,7 @@ No build step: the extension runs straight from the repository.
 open `http://localhost:8766/test/sample-article.html` (also `embeds-article.html`,
 `code-article.html`, `review-article.html`, `images-article.html`, `paywall-article.html`,
 `security-article.html`, `hidden-dialog-article.html`, `split-article.html`, `words-article.html`,
-`other-story-article.html`, `multipage/garden-guide.html`). URL options:
+`other-story-article.html`, `chart-article.html`, `multipage/garden-guide.html`). URL options:
 
 - `?open=1` opens Reader on load.
 - `?theme=night&font=georgia&zoom=120&sidebar=0` preset the settings.
@@ -183,5 +187,5 @@ the zip to a new GitHub release.
 
 ## License
 
-MIT, see [LICENSE](LICENSE). Mozilla Readability in `vendor/` is Apache-2.0
-(see `vendor/Readability-LICENSE.md`).
+MIT, see [LICENSE](LICENSE). Mozilla Readability and hls.js in `vendor/` are Apache-2.0
+(see `vendor/Readability-LICENSE.md` and `vendor/hls-LICENSE`).

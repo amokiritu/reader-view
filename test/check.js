@@ -137,6 +137,28 @@ function serve() {
 
   page = await openReader("review-article.html");
   check("review: pros and cons box", (await inReader(page, 'return content.querySelectorAll(".procon").length;')) >= 1);
+  check(
+    "a site's own video player becomes a video with its poster",
+    await inReader(page, 'const v = content.querySelector("video[data-rv-stream$=\'master.m3u8\']"); return !!v && /town\\.svg/.test(v.poster);')
+  );
+  await page.close();
+
+  page = await openReader("chart-article.html");
+  const embeds = await inReader(page, 'return [...content.querySelectorAll("iframe")].map((f) => f.dataset.rvEmbed + " " + f.title);');
+  check("a Datawrapper chart among the paragraphs is shown, with its name", embeds.includes("chart Inflation by month"), embeds);
+  check("a video in a sidebar aside is not", !embeds.some((e) => e.startsWith("video")), embeds);
+  const drawn = await inReader(page, `const f = content.querySelector("figure[data-rv-chart]"); if (!f) return null;
+    const plot = f.querySelector("svg svg"); const bar = plot && plot.querySelector("rect");
+    return { title: f.textContent.includes("Monthly inflation"), y: plot && plot.getAttribute("y"), fill: bar && getComputedStyle(bar).fill };`);
+  check("a chart drawn on the page is shown, its layers together and in its colours",
+    !!drawn && drawn.title && drawn.y === "30" && drawn.fill === "rgb(0, 160, 136)", drawn);
+  await page.close();
+
+  page = await openReader("images-article.html");
+  const photos = await inReader(page, 'return [...content.querySelectorAll("img")].map((i) => i.getAttribute("src"));');
+  check("photos that load as you scroll are shown", ["hills-1400.svg", "town.svg", "coast-large.svg"].every((f) => photos.some((s) => s.endsWith("img/" + f))) && !photos.some((s) => s.startsWith("data:")), photos);
+  check("a picture the site has in desktop and mobile copies is shown once", photos.filter((s) => s.endsWith("?series")).length === 1);
+  check("a membership box inside the article is removed", !/not a member yet|Cancel anytime/.test(await text(page)));
   await page.close();
   page = await openReader("code-article.html");
   check("code blocks with a Copy button", (await inReader(page, 'return content.querySelectorAll(".code-block .code-copy").length;')) >= 3);

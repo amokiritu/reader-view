@@ -16,6 +16,8 @@ const HARNESS_ORIGIN = new URL(document.currentScript.src).origin;
       console.log("[harness] message", m);
       // Stand-in for the background worker's code fetcher (src/code-fetch.js).
       if (m && m.type === "fetch-code") return resolveCode(m.url, location.href);
+      // Stand-in for the background worker injecting hls.js.
+      if (m && m.type === "load-hls") return load(HARNESS_ORIGIN + "/vendor/hls.light.min.js").then(() => true);
     },
   };
   chrome.storage = {

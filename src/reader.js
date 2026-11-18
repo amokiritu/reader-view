@@ -140,6 +140,8 @@
   function prepareClone(joinBody = false) {
     const clone = document.cloneNode(true);
     if (!document.body || !clone.body) return clone;
+    resolveLazyImages(clone.body);
+    const charts = findCharts(clone); // before anything changes the copy's structure
 
     const liveWalker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
     const copyWalker = clone.createTreeWalker(clone.body, NodeFilter.SHOW_ELEMENT);
@@ -191,10 +193,16 @@
           // Readability always deletes <aside>. Some sites (e.g. Business Daily) wrap each
           // body paragraph in an <aside>; keep visible ones that are plainly article text.
           if (live.tagName === "ASIDE" && looksLikeBodyText(live)) asidesToDiv.push(copy);
+          // …and a chart or video among them in an <aside> of its own.
+          else if (live.tagName === "ASIDE" && [live.previousElementSibling, live.nextElementSibling].some((s) => s && s.tagName === "ASIDE" && looksLikeBodyText(s)) &&
+            [...live.querySelectorAll("iframe")].some((f) => embedKind(f.getAttribute("src") || f.getAttribute("data-src") || ""))) asidesToDiv.push(copy);
           // Author headshots, icons and logos: small on screen, never article photos.
           if (live.tagName === "IMG") {
             const r = live.getBoundingClientRect();
-            if (r.width > 0 && r.height > 0 && r.width < 120 && r.height < 120) toRemove.push(copy);
+            // (Not a lazy photo's unsized 1×1 stand-in, whose real address resolveLazyImages
+            // found. A headshot's stand-in already shows at the headshot's small size.)
+            const standInOnly = r.width <= 2 && r.height <= 2 && standIn(live.getAttribute("src")) && !standIn(copy.getAttribute("src"));
+            if (r.width > 0 && r.height > 0 && r.width < 120 && r.height < 120 && !standInOnly) toRemove.push(copy);
           }
           // Visible on screen, so make sure Readability doesn't treat it as hidden.
           copy.removeAttribute("hidden");
@@ -225,6 +233,7 @@
       div.append(...aside.childNodes);
       aside.replaceWith(div);
     }
+    keepCharts(clone, charts);
     tidyHeadings(clone);
     normalizePullQuotes(clone);
     normalizeScoreBadges(clone);
@@ -232,6 +241,139 @@
     normalizeEmbeds(clone, location.href);
     protectArticleAncestors(clone, joinBody);
     return clone;
+  }
+
+  // ---------- charts drawn on the page ----------
+  // Charts drawn as SVG by the page's script (Highcharts, D3 and the like). Readability throws
+  // away a block with no ordinary text in it, so each chart goes into a <figure>. Some sites
+  // (WSJ) draw a chart in two layers, a frame with its title, notes and source and the plot
+  // laid over it; Reader puts the plot inside the frame so the two stay together.
+  const CHART_ATTR = "data-rv-chart-svg";
+
+  function isChartSvg(s) {
+    if (s.parentElement?.closest("svg") || s.closest(`#${HOST_ID}`)) return false;
+    const r = s.getBoundingClientRect();
+    return r.width >= 250 && r.height >= 120 && !!s.querySelector("text") && s.querySelectorAll("path, rect, line, circle, polyline").length >= 3;
+  }
+
+  // Charting libraries often colour a chart from the page's stylesheet (Highcharts' "styled
+  // mode" on WSJ), which doesn't come into Reader, so every shape would turn black. Write the
+  // colours and fonts the page shows onto each part of the drawing.
+  const CHART_STYLES = ["display", "visibility", "opacity", "fill", "fill-opacity", "stroke", "stroke-width", "stroke-opacity",
+    "stroke-dasharray", "stroke-linecap", "stroke-linejoin", "font-family", "font-size", "font-weight", "font-style", "text-anchor",
+    "dominant-baseline", "letter-spacing"];
+
+  function bakeChartStyles(live, copy) {
+    const a = [live, ...live.querySelectorAll("*")];
+    const b = [copy, ...copy.querySelectorAll("*")];
+    if (a.length !== b.length) return;
+    a.forEach((el, i) => {
+      if (/^(defs|clipPath|title|desc|style|script)$/i.test(el.tagName) || el.closest("defs, clipPath")) return;
+      const cs = getComputedStyle(el);
+      b[i].setAttribute("style", CHART_STYLES.map((p) => `${p}:${cs.getPropertyValue(p)}`).join(";"));
+    });
+  }
+
+  // Words in a block outside any drawing (a chart's block has none).
+  function hasOwnText(el) {
+    const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+      acceptNode: (t) => (t.parentElement.closest("svg, style, script") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+    });
+    for (let t = w.nextNode(); t; t = w.nextNode()) if (t.nodeValue.trim()) return true;
+    return false;
+  }
+
+  // Runs on the live page right after cloning, while the copy still matches it node for node:
+  // marks each chart's drawings in the copy and notes how they're laid out.
+  function findCharts(clone) {
+    const live = [...document.body.querySelectorAll("svg")];
+    const copy = [...clone.body.querySelectorAll("svg")];
+    if (live.length !== copy.length || !live.some(isChartSvg)) return [];
+    // Dark Reader (and extensions like it) recolour the page for dark mode with stylesheets of
+    // their own. Read the chart's own colours with those switched off for a moment.
+    const recolour = [...document.querySelectorAll("style.darkreader")].map((st) => st.sheet).filter((sh) => sh && !sh.disabled);
+    recolour.forEach((sh) => (sh.disabled = true));
+    try {
+      return groupCharts(live, copy);
+    } finally {
+      recolour.forEach((sh) => (sh.disabled = false));
+    }
+  }
+
+  function groupCharts(live, copy) {
+    const groups = new Map(); // block on the page -> chart
+    live.forEach((s, i) => {
+      if (!isChartSvg(s)) return;
+      // The block that holds just this chart.
+      let block = s;
+      let depth = 0;
+      for (let p = s.parentElement, d = 1; p && p !== document.body && d <= 10; p = p.parentElement, d++) {
+        if (/^(ARTICLE|MAIN|SECTION|P|LI|TD|FIGURE)$/.test(p.tagName) || hasOwnText(p)) {
+          if (p.tagName === "FIGURE") (block = null);
+          break;
+        }
+        block = p;
+        depth = d;
+      }
+      if (!block) return; // already in a figure, which Readability keeps
+      copy[i].setAttribute(CHART_ATTR, String(i));
+      bakeChartStyles(s, copy[i]);
+      let g = groups.get(block);
+      if (!g) groups.set(block, (g = { parts: [] }));
+      g.parts.push({ i, depth, rect: s.getBoundingClientRect(), svg: s, block });
+    });
+    const charts = [];
+    for (const g of groups.values()) {
+      // The largest drawing is the frame; one lying over it is a layer of the same chart.
+      g.parts.sort((a, b) => b.rect.width * b.rect.height - a.rect.width * a.rect.height);
+      const base = g.parts[0];
+      const layers = [];
+      const separate = [];
+      for (const part of g.parts.slice(1)) {
+        const dx = part.rect.left - base.rect.left;
+        const dy = part.rect.top - base.rect.top;
+        const inside = dx >= -2 && dy >= -2 && dx + part.rect.width <= base.rect.width + 2 && dy + part.rect.height <= base.rect.height + 2;
+        // Or laid over the frame by its own position (top/left), whatever the page's layout.
+        let pos = null;
+        for (let a = part.svg.parentElement; a && a !== part.block.parentElement && !pos; a = a.parentElement) {
+          if (a.contains(base.svg)) break;
+          const cs = getComputedStyle(a);
+          if (cs.position === "absolute") pos = { x: parseFloat(cs.left) || 0, y: parseFloat(cs.top) || 0 };
+        }
+        if (inside) layers.push({ i: part.i, x: dx, y: dy });
+        else if (pos && pos.x + part.rect.width <= base.rect.width + 2 && pos.y + part.rect.height <= base.rect.height + 2) layers.push({ i: part.i, ...pos });
+        else separate.push(part.i);
+      }
+      charts.push({ base: base.i, layers, separate, depth: base.depth });
+    }
+    return charts;
+  }
+
+  function keepCharts(clone, charts) {
+    const find = (i) => clone.body.querySelector(`svg[${CHART_ATTR}="${i}"]`);
+    for (const c of charts) {
+      const base = find(c.base);
+      if (!base) continue; // removed as hidden
+      let block = base;
+      for (let d = 0; d < c.depth && block.parentElement && block.parentElement !== clone.body; d++) block = block.parentElement;
+      const fig = clone.createElement("figure");
+      fig.setAttribute("data-rv-chart", "");
+      if (!base.getAttribute("viewBox")) {
+        const w = parseFloat(base.getAttribute("width"));
+        const h = parseFloat(base.getAttribute("height"));
+        if (w > 0 && h > 0) base.setAttribute("viewBox", `0 0 ${w} ${h}`);
+      }
+      for (const l of c.layers) {
+        const svg = find(l.i);
+        if (!svg) continue;
+        svg.setAttribute("x", String(Math.round(l.x)));
+        svg.setAttribute("y", String(Math.round(l.y)));
+        base.append(svg);
+      }
+      fig.append(base, ...c.separate.map(find).filter(Boolean));
+      block.replaceWith(fig);
+    }
+    for (const s of clone.body.querySelectorAll(`[${CHART_ATTR}]`)) s.removeAttribute(CHART_ATTR);
   }
 
   // Score badges drawn as a number beside a logo ("7.9" + the "CNET Score" wordmark): the logo
@@ -457,12 +599,13 @@
   // drops most iframes and strips the classes that mark posts, so we turn every embed into a
   // plain iframe tagged with data-rv-embed (data attributes survive Readability) beforehand.
   const EMBED_RE =
-    /^https?:\/\/((www\.)?(youtube(-nocookie)?\.com\/embed\/|dailymotion\.com\/embed\/|archive\.org\/embed\/)|player\.vimeo\.com\/video\/|platform\.(twitter|x)\.com\/embed\/|embed\.bsky\.app\/embed\/|player\.twitch\.tv\/|upload\.wikimedia\.org\/)/i;
+    /^https?:\/\/((www\.)?(youtube(-nocookie)?\.com\/embed\/|dailymotion\.com\/embed\/|archive\.org\/embed\/)|player\.vimeo\.com\/video\/|platform\.(twitter|x)\.com\/embed\/|embed\.bsky\.app\/embed\/|player\.twitch\.tv\/|upload\.wikimedia\.org\/|datawrapper\.dwcdn\.net\/|flo\.uri\.sh\/visualisation\/)/i;
 
   function embedKind(src) {
     if (!src || !EMBED_RE.test(src)) return "";
     if (/\/\/platform\.(twitter|x)\.com\//i.test(src)) return "x";
     if (/\/\/embed\.bsky\.app\//i.test(src)) return "bluesky";
+    if (/\/\/(datawrapper\.dwcdn\.net|flo\.uri\.sh)\//i.test(src)) return "chart";
     return "video";
   }
 
@@ -510,7 +653,34 @@
       );
       const src = raw ? abs(raw) : "";
       const kind = embedKind(src);
-      if (kind) replace(f, makeEmbed(kind, src, f.getAttribute("data-rv-height")));
+      if (!kind) continue;
+      const embed = makeEmbed(kind, src, f.getAttribute("data-rv-height"));
+      // A chart keeps its name (read out by screen readers) and the height the site gave it.
+      if (kind === "chart") for (const a of ["title", "height"]) if (f.getAttribute(a)) embed.setAttribute(a, f.getAttribute(a));
+      replace(f, embed);
+    }
+
+    // Sites' own video players (EX.CO on CNET and other sites) that keep the video's stream or
+    // file address in a data attribute, with a poster image, until their script builds the
+    // player. Reader plays the stream itself (see setupStreams).
+    const STREAM = /^https?:\/\/[^\s"'<>]+\.(m3u8|mp4)(\?[^\s"'<>]*)?$/i;
+    for (const n of [...doc.body.querySelectorAll("*")]) {
+      if (!doc.body.contains(n) || n.tagName === "VIDEO" || n.closest("video")) continue;
+      const attr = [...n.attributes].find((a) => /^data-.*(video|src|stream|file|url)/i.test(a.name) && STREAM.test(a.value.trim()));
+      if (!attr) continue;
+      const posterAttr = [...n.attributes].find((a) => /^data-.*(poster|thumb|image)/i.test(a.name) && /^https?:\/\//i.test(a.value.trim()));
+      const poster = posterAttr ? posterAttr.value.trim() : n.querySelector("img")?.getAttribute("src");
+      const v = doc.createElement("video");
+      v.setAttribute("data-rv-stream", attr.value.trim());
+      v.setAttribute("controls", "");
+      v.setAttribute("preload", "none");
+      v.setAttribute("playsinline", "");
+      if (poster && !/^data:/i.test(poster)) v.setAttribute("poster", abs(poster));
+      const title = [...n.attributes].find((a) => /^data-.*title/i.test(a.name))?.value;
+      if (title) v.setAttribute("aria-label", title.trim());
+      const fig = doc.createElement("figure");
+      fig.append(v);
+      replace(n, fig);
     }
 
     // Bluesky posts the page hasn't loaded yet: build the embed from the post's address.
@@ -585,21 +755,67 @@
       f.setAttribute("allow", "autoplay; encrypted-media; picture-in-picture; fullscreen; clipboard-write");
       f.setAttribute("allowfullscreen", "");
       f.setAttribute("loading", "lazy");
-      f.setAttribute("title", kind === "video" ? "Embedded video" : kind === "x" ? "Post on X" : "Post on Bluesky");
+      const title = f.getAttribute("title");
+      f.setAttribute("title", kind === "video" ? "Embedded video" : kind === "x" ? "Post on X" : kind === "chart" ? title || "Chart" : "Post on Bluesky");
+      const setHeight = parseInt(f.getAttribute("height"), 10);
       for (const a of ["width", "height", "style", "frameborder", "scrolling", "srcdoc", "name"]) f.removeAttribute(a);
       if (kind !== "video") {
         // Posts size themselves via postMessage once loaded; start from the size on the page.
-        const h = parseInt(f.getAttribute("data-rv-height"), 10);
-        f.style.height = (h > 80 ? h : kind === "x" ? 480 : 380) + "px";
+        const h = parseInt(f.getAttribute("data-rv-height"), 10) || (kind === "chart" ? setHeight : 0);
+        f.style.height = (h > 80 ? h : kind === "x" ? 480 : kind === "chart" ? 420 : 380) + "px";
         f.setAttribute("scrolling", "no");
       }
     }
   }
 
-  // X and Bluesky embeds report their rendered height to the page that holds them.
+  // Videos from sites' own players (see normalizeEmbeds). An .mp4 plays directly. A stream
+  // (.m3u8) comes in pieces that Chromium can't play by itself, so Reader loads hls.js, only
+  // on articles that have one, and fetches the video only once it's played.
+  let streamPlayers = [];
+
+  async function setupStreams(root) {
+    const videos = [...root.querySelectorAll("video[data-rv-stream]:not([data-rv-ready])")];
+    for (const v of videos) v.setAttribute("data-rv-ready", "");
+    const streams = videos.filter((v) => {
+      if (/\.m3u8(\?|$)/i.test(v.getAttribute("data-rv-stream"))) return true;
+      v.src = v.getAttribute("data-rv-stream");
+      return false;
+    });
+    if (!streams.length) return;
+    if (!self.Hls && !(streams[0].canPlayType("application/vnd.apple.mpegurl") === "probably")) {
+      try {
+        await chrome.runtime.sendMessage({ type: "load-hls" });
+      } catch {}
+    }
+    for (const v of streams) {
+      const url = v.getAttribute("data-rv-stream");
+      if (self.Hls && self.Hls.isSupported()) {
+        // No worker: the page's security rules may not allow one.
+        const hls = new self.Hls({ autoStartLoad: false, enableWorker: false });
+        hls.loadSource(url);
+        hls.attachMedia(v);
+        v.addEventListener("play", () => hls.startLoad(), { once: true });
+        streamPlayers.push(hls);
+      } else {
+        v.src = url; // a browser that plays streams itself
+      }
+    }
+  }
+
+  function stopStreams() {
+    for (const hls of streamPlayers) {
+      try {
+        hls.destroy();
+      } catch {}
+    }
+    streamPlayers = [];
+  }
+
+  // X and Bluesky posts and Datawrapper and Flourish charts report their rendered height to
+  // the page that holds them.
   function onEmbedMessage(e) {
-    if (!ui || !/^https:\/\/(platform\.(twitter|x)\.com|embed\.bsky\.app)$/.test(e.origin)) return;
-    const frame = [...ui.content.querySelectorAll('iframe[data-rv-embed="x"], iframe[data-rv-embed="bluesky"]')].find(
+    if (!ui || !/^https:\/\/(platform\.(twitter|x)\.com|embed\.bsky\.app|datawrapper\.dwcdn\.net|flo\.uri\.sh)$/.test(e.origin)) return;
+    const frame = [...ui.content.querySelectorAll('iframe[data-rv-embed="x"], iframe[data-rv-embed="bluesky"], iframe[data-rv-embed="chart"]')].find(
       (f) => f.contentWindow === e.source
     );
     if (!frame) return;
@@ -612,7 +828,8 @@
       }
     }
     const tw = d && d["twttr.embed"];
-    const h = tw ? tw.method === "twttr.private.resize" && tw.params && tw.params[0] && tw.params[0].height : d && d.height;
+    const dw = d && d["datawrapper-height"]; // { chartId: height }
+    const h = dw && typeof dw === "object" ? Object.values(dw)[0] : tw ? tw.method === "twttr.private.resize" && tw.params && tw.params[0] && tw.params[0].height : d && d.height;
     if (h > 50 && h < 4000) frame.style.height = Math.ceil(h) + "px";
   }
 
@@ -1007,7 +1224,32 @@
   const SITE_PROMO =
     /^(follow (topics|authors|this author|the author|us)\b|(follow topics and authors )?from this story to see more like this|get the latest .{0,60} (in|to) your inbox|sign up for (our|the) .{0,40}newsletter|this story (was|has been) updated|most popular\b|more from\b|you might also like\b|why you can trust\b|add us as a preferred source\b)/i;
 
+  // A membership, donation or subscription box inside the article ("Wait, you're not a
+  // member yet? … Join"): a short box with a heading whose call to action is a button-like
+  // link to such a page.
+  const CTA_PATH = /\/(membership|members?|donate|donations?|support-us|subscribe|subscriptions?|join)(\/|$)/i;
+
+  function removeCallToAction(frag) {
+    for (const a of [...frag.querySelectorAll("a[href]")]) {
+      if (!frag.contains(a)) continue;
+      let path;
+      try {
+        path = new URL(a.getAttribute("href"), location.href).pathname;
+      } catch {
+        continue;
+      }
+      const label = norm(a.textContent);
+      if (!CTA_PATH.test(path) || !label || label.length > 25) continue;
+      const line = a.closest("p, li, div");
+      if (!line || !frag.contains(line) || norm(line.textContent).length > 40) continue; // a link inside a sentence
+      let box = line;
+      while (box.parentElement && frag.contains(box.parentElement) && !box.parentElement.matches(".page") && norm(box.parentElement.textContent).length < 300) box = box.parentElement;
+      if (box !== line && box.querySelector("h2, h3, h4, h5, h6") && !box.querySelector("figcaption")) box.remove();
+    }
+  }
+
   function removeJunk(frag) {
+    removeCallToAction(frag);
     // Site promos: remove the whole paragraph/block, not just the inner element that matched.
     for (const n of [...frag.querySelectorAll("p, li, div, section, aside")]) {
       if (!n.parentNode || n.querySelector("img, picture, video, iframe, p") || n.closest(".code-block, .procon")) continue;
@@ -1159,6 +1401,52 @@
       svg = /;base64/i.test(m[1]) ? atob(svg) : decodeURIComponent(svg);
     } catch {}
     return !/<(path|rect|circle|ellipse|line|polyline|polygon|image|text|use|g)\b/i.test(svg);
+  }
+
+  // Photos that load as you scroll keep their real address in a data attribute and show a
+  // stand-in (an empty inline SVG, a tiny GIF, or nothing) until then. Readability only
+  // fixes the ones marked "lazy", so photos further down came out as blank boxes (e.g.
+  // WP Rocket's data-lazy-srcset on Reasons to be Cheerful). Use the real address, as the
+  // page would once scrolled to, falling back to the copy in a <noscript> beside it.
+  const LAZY_SRC = ["data-lazy-src", "data-src", "data-original", "data-lazy", "data-hi-res-src", "data-full-src", "data-orig-src", "data-url"];
+  const LAZY_SRCSET = ["data-lazy-srcset", "data-srcset", "data-original-set"];
+  const LAZY_SIZES = ["data-lazy-sizes", "data-sizes"];
+
+  function standIn(src) {
+    const s = (src || "").trim();
+    return !s || (/^data:/i.test(s) && (blankSvg(s) || s.length < 300));
+  }
+
+  function resolveLazyImages(root) {
+    const realAttr = (el, names) =>
+      names.map((n) => (el.getAttribute(n) || "").trim()).find((v) => v && !/^data:/i.test(v) && /^(https?:|\/|\.|[\w-])/i.test(v) && /[./]/.test(v)); // an address, not "true"
+    for (const el of root.querySelectorAll("img, picture source")) {
+      const srcset = realAttr(el, LAZY_SRCSET);
+      const sizes = realAttr(el, LAZY_SIZES);
+      if (el.tagName === "SOURCE") {
+        if (srcset && standIn(el.getAttribute("srcset"))) el.setAttribute("srcset", srcset);
+        continue;
+      }
+      if (!standIn(el.getAttribute("src"))) continue;
+      let src = realAttr(el, LAZY_SRC);
+      let set = srcset;
+      if (!src && !set) {
+        // The page's own fallback for browsers without scripts: <noscript><img src=…></noscript>.
+        const ns = el.nextElementSibling?.tagName === "NOSCRIPT" ? el.nextElementSibling : el.parentElement?.querySelector(":scope > noscript");
+        const fallback = ns && new DOMParser().parseFromString(ns.textContent || "", "text/html").querySelector("img");
+        if (fallback && !standIn(fallback.getAttribute("src"))) {
+          src = fallback.getAttribute("src");
+          set = fallback.getAttribute("srcset");
+        }
+      }
+      if (!src && set) src = set.split(/,\s+/)[0].trim().split(/\s+/)[0];
+      if (!src) continue;
+      el.setAttribute("src", src);
+      if (set) el.setAttribute("srcset", set);
+      else el.removeAttribute("srcset");
+      if (sizes && sizes !== "auto") el.setAttribute("sizes", sizes);
+      else if (el.getAttribute("sizes") === "auto") el.removeAttribute("sizes");
+    }
   }
 
   // Many sites put the main photo in a hero section above the article body, outside the
@@ -1443,6 +1731,13 @@
     }
   }
 
+  function nothingBetween(a, b) {
+    const r = (a.ownerDocument || document).createRange();
+    r.setStartAfter(a);
+    r.setEndBefore(b);
+    return !norm(r.toString()) && !r.cloneContents().querySelector("img, picture, video, iframe");
+  }
+
   // Photo galleries and product cards: drop slide counters ("1/5", "3 of 12"), show a photo
   // the site offers in two crops only once, and keep a gallery's caption with its photos.
   function tidyPhotos(frag) {
@@ -1481,7 +1776,10 @@
       if (!a || !b || a.key !== b.key || !frag.contains(imgs[i - 1])) continue;
       let common = imgs[i - 1].parentElement;
       while (common && !common.contains(imgs[i])) common = common.parentElement;
-      if (!common || norm(common.textContent).length > 40) continue; // words between them: two uses
+      // Words between them: two uses of one photo. Nothing between them: the site's desktop
+      // and mobile copies of one picture (one hidden on the page).
+      const copies = imgs[i - 1].getAttribute("src") === imgs[i].getAttribute("src") && nothingBetween(imgs[i - 1], imgs[i]);
+      if (!common || (norm(common.textContent).length > 40 && !copies)) continue;
       if (b.w > a.w) drop(imgs[i - 1]);
       else {
         drop(imgs[i]);
@@ -1831,6 +2129,7 @@
       const section = el("div", { class: "page-part", "data-page": String(num + 1) });
       section.append(frag);
       ui.content.append(el("hr", { class: "page-break", "aria-label": `Page ${num + 1}` }), section);
+      setupStreams(section);
       refreshToc();
 
       doc = nextDoc;
@@ -2627,6 +2926,7 @@
       lb.box,
     ]);
     root.append(reader);
+    setupStreams(built.content);
 
     // Images enlarge in place instead of opening their link.
     built.content.addEventListener("click", (e) => {
@@ -2841,6 +3141,7 @@
     const { host, reader, prev, printStyle, stopPrintWatch, onKey, onResize, resizeObserver } = ui;
     ui = null;
     stopPrintWatch();
+    stopStreams();
 
     window.removeEventListener("message", onEmbedMessage);
     window.removeEventListener("keydown", onKey, true);

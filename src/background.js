@@ -164,6 +164,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       // Reader asks for a Gist (or Medium embed) the article only links to.
       resolveCode(msg.url, sender.tab.url || "").then(sendResponse, () => sendResponse(null));
       return true; // answer arrives asynchronously
+    case "load-hls":
+      // hls.js, for an article with a streaming video (see setupStreams in reader.js).
+      chrome.scripting
+        .executeScript({ target: { tabId, frameIds: [sender.frameId || 0] }, files: ["vendor/hls.light.min.js"] })
+        .then(() => sendResponse(true), () => sendResponse(false));
+      return true;
     case "update-info":
       updateLoaded.then(() => sendResponse(update));
       return true;

@@ -122,10 +122,11 @@
 
 /* The article sits on a "page" card over a slightly darker background, like Safari. */
 .rv-page {
-  /* Proportions measured from Safari: ~36em text column, ~3.85em side padding. */
+  /* Side padding measured from Safari (~3.85em). The text column is wider than Safari's ~36em
+     so the card fills more of a wide window at 100% zoom. */
   --pad: 3.85em;
   box-sizing: border-box;
-  width: calc(36em + 2 * var(--pad));
+  width: calc(42em + 2 * var(--pad));
   max-width: calc(100% - 40px);
   min-height: calc(100vh - 20px);
   margin: 20px auto 0;
@@ -224,6 +225,31 @@
   background: transparent;
   color-scheme: normal;
 }
+/* Datawrapper and Flourish charts: full width, height set by the chart itself. */
+.content iframe[data-rv-embed="chart"] {
+  aspect-ratio: auto;
+  margin: 1.6em 0;
+  border-radius: 4px;
+}
+/* Charts are drawn on white: give them a white margin on dark and tinted pages. */
+.theme-sepia .content iframe[data-rv-embed="chart"],
+.theme-gray .content iframe[data-rv-embed="chart"],
+.theme-night .content iframe[data-rv-embed="chart"] {
+  background: #fff;
+  box-shadow: 0 0 0 12px #fff;
+  margin: calc(1.6em + 12px) 0;
+}
+/* A chart drawn on the page itself (see findCharts in reader.js), in the colours it had there. */
+.content figure[data-rv-chart] > svg { margin: 0 auto; border-radius: 4px; }
+.theme-sepia .content figure[data-rv-chart] > svg,
+.theme-gray .content figure[data-rv-chart] > svg,
+.theme-night .content figure[data-rv-chart] > svg {
+  background: #fff;
+  box-shadow: 0 0 0 12px #fff;
+}
+.theme-sepia .content figure[data-rv-chart],
+.theme-gray .content figure[data-rv-chart],
+.theme-night .content figure[data-rv-chart] { margin: calc(1.6em + 12px) 0; }
 .content iframe[data-rv-embed="video"] {
   border-radius: 4px;
   background: #000;
@@ -868,6 +894,11 @@ img.lead-media,
   .code-copy { display: none !important; }
   .content pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .stage { padding: 0 !important; }
-  .rv-page { --pad: 0px; width: auto; padding: 0; margin: 0; max-width: none; box-shadow: none; background: #fff; transform: none !important; }
+  /* Print at a normal book size whatever the on-screen zoom, like Safari. */
+  .rv-page { --pad: 0px; width: auto; padding: 0; margin: 0; max-width: none; box-shadow: none; background: #fff; transform: none !important;
+    font-size: 11pt !important; line-height: 1.5; }
+  .title { font-size: 1.75em; }
+  .meta { font-size: 0.9em; }
+  .content img, .content video { max-height: 4in; width: auto; max-width: 100%; }
   .content a { color: inherit; text-decoration: underline; }
 }

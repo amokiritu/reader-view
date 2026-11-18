@@ -1,6 +1,6 @@
 {
   "name": "reader-view",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "private": true,
   "license": "MIT",
   "description": "Chrome extension: distraction-free reader view",
@@ -9,6 +9,7 @@
     "package": "node scripts/package.js"
   },
   "dependencies": {
-    "@mozilla/readability": "^0.6.0"
+    "@mozilla/readability": "^0.6.0",
+    "hls.js": "^1.7.4"
   }
 }
