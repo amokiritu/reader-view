@@ -151,19 +151,31 @@ No build step: the extension runs straight from the repository.
 | `src/reader.css` | Typography, themes, the Aa menu |
 | `src/code-fetch.js` | Background helper that fetches Gists and Medium embed pages |
 | `vendor/` | Mozilla Readability 0.6 (Apache-2.0). `npm install` refreshes it |
-| `test/` | Test pages and a harness that runs Reader in a normal tab |
+| `test/` | Test pages, a harness that runs Reader in a normal tab, and automated checks (`check.js`) |
 
 **Try changes:** after editing, click the reload arrow on the extension card and refresh the tab.
 
 **Test pages without installing:** run `python -m http.server 8766` in the repository folder and
 open `http://localhost:8766/test/sample-article.html` (also `embeds-article.html`,
 `code-article.html`, `review-article.html`, `images-article.html`, `paywall-article.html`,
-`security-article.html`,
-`multipage/garden-guide.html`). URL options:
+`security-article.html`, `hidden-dialog-article.html`, `split-article.html`, `words-article.html`,
+`other-story-article.html`, `multipage/garden-guide.html`). URL options:
 
 - `?open=1` opens Reader on load.
 - `?theme=night&font=georgia&zoom=120&sidebar=0` preset the settings.
 - `?mockai=available` or `?mockai=downloadable` fakes Chrome's on-device AI.
+
+**Automated checks:** `test/check.js` loads the extension into Chromium and uses it on the test
+pages: what Reader shows, the keyboard, zoom and themes, enlarged photos, reading position,
+multi-page articles, printing and "use automatically". It needs [Playwright](https://playwright.dev):
+
+```bash
+npm install --no-save playwright && npx playwright install chromium
+node test/check.js
+```
+
+Add `--sites urls.txt` (one address per line) to also open real pages and report how much of
+each page's visible article Reader shows.
 
 **Release:** bump `version` in `manifest.json` and `package.json`, commit, run
 `npm run package` (builds `dist/reader-view-v<version>.zip` from the last commit), then attach

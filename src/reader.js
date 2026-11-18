@@ -120,12 +120,24 @@
   // ---------- article extraction ----------
 
   const SKIP_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "LINK", "META", "BR", "WBR", "SOURCE", "TRACK"]);
+  // Pop-ups (cookie settings, sign-up and log-in boxes). One that isn't showing is never article text.
+  const DIALOG_SEL = 'dialog, [role="dialog"], [role="alertdialog"], [aria-modal="true"]';
+  // Marks a large block that is in the page but not on screen (see prepareClone).
+  const OFFSCREEN_ATTR = "data-rv-offscreen";
+
+  // Move a TreeWalker to the next element that is not inside the current one.
+  function skipSubtree(walker) {
+    do {
+      if (walker.nextSibling()) return walker.currentNode;
+    } while (walker.parentNode());
+    return null;
+  }
 
   // Readability decides visibility from inline styles and hidden/aria-hidden attributes only.
   // Paywalled pages often mark the full body hidden that way and an unlocker (e.g. a paywall
   // bypass extension) then reveals it with CSS, so Readability would drop text the user can see.
   // Walk the live page and its clone in lockstep and make the clone match what's on screen.
-  function prepareClone() {
+  function prepareClone(joinBody = false) {
     const clone = document.cloneNode(true);
     if (!document.body || !clone.body) return clone;
 
@@ -139,6 +151,7 @@
 
     while (live && copy) {
       if (live.tagName !== copy.tagName) break; // structures diverged; stop adjusting
+      let skipInside = false;
       if (!SKIP_TAGS.has(live.tagName) && live.id !== HOST_ID && live.style) {
         const cs = getComputedStyle(live);
         const hidden = cs.display === "none" || cs.visibility === "hidden";
@@ -150,6 +163,15 @@
           if (textLen < 300 && !hasMedia && !live.querySelector("p")) toRemove.push(copy);
           // An X/Bluesky post's original quote, hidden once the real embed has loaded.
           else if (live.matches("blockquote.twitter-tweet, blockquote.bluesky-embed")) toRemove.push(copy);
+          // A pop-up that isn't showing, however much text it holds (e.g. OneTrust's cookie
+          // settings, which sit hidden on every page of the sites that use it).
+          else if (live.matches(DIALOG_SEL) || live.querySelector(DIALOG_SEL)) toRemove.push(copy);
+          // Anything else large and hidden is left for Readability to judge, but it must not
+          // be counted as the article's own text (see protectArticleAncestors).
+          else copy.setAttribute(OFFSCREEN_ATTR, "");
+          // Everything inside a display:none block is hidden with it, whatever its own style
+          // says, so don't treat those elements as visible.
+          skipInside = cs.display === "none";
         } else {
           // Remember how tall embedded posts are on the page, so Reader can size them the same.
           if (live.tagName === "IFRAME") {
@@ -181,8 +203,13 @@
           if (copy.style.visibility === "hidden") copy.style.removeProperty("visibility");
         }
       }
-      live = liveWalker.nextNode();
-      copy = copyWalker.nextNode();
+      if (skipInside) {
+        live = skipSubtree(liveWalker);
+        copy = skipSubtree(copyWalker);
+      } else {
+        live = liveWalker.nextNode();
+        copy = copyWalker.nextNode();
+      }
     }
     for (const n of toRemove) n.remove();
     for (const [copy, code, lang] of codeBlocks) {
@@ -198,11 +225,12 @@
       div.append(...aside.childNodes);
       aside.replaceWith(div);
     }
+    tidyHeadings(clone);
     normalizePullQuotes(clone);
     normalizeScoreBadges(clone);
     normalizeCode(clone, location.href);
     normalizeEmbeds(clone, location.href);
-    protectArticleAncestors(clone);
+    protectArticleAncestors(clone, joinBody);
     return clone;
   }
 
@@ -256,13 +284,22 @@
     /-ad-|ai2html|banner|breadcrumbs|combx|comment|community|cover-wrap|disqus|extra|footer|gdpr|header|legends|menu|related|remark|replies|rss|shoutbox|sidebar|skyscraper|social|sponsor|supplemental|ad-break|agegate|pagination|pager|popup|yom-remote|hidden|^hid$|masthead|media|meta|outbrain|promo|scroll|share|shopping|tags|widget|contact|com-/i;
   const MISLEADING_ROLES = new Set(["menu", "menubar", "complementary", "navigation", "alert", "alertdialog", "dialog"]);
 
-  function protectArticleAncestors(doc) {
+  // joinBody: also place the blocks of a split-up article body next to each other.
+  function protectArticleAncestors(doc, joinBody = false) {
     if (!doc.body) return;
+    // Only paragraphs the reader can see: a hidden block with a lot of text (cookie settings,
+    // a sign-up form) must not be mistaken for the article and "protected" in its place.
     const paras = [...doc.body.querySelectorAll("p")]
+      .filter((p) => !p.closest(`[${OFFSCREEN_ATTR}]`))
       .map((p) => [p, (p.textContent || "").trim().length])
       .filter(([, n]) => n > 80);
     const total = paras.reduce((s, [, n]) => s + n, 0);
     if (total < 500) return;
+    const split = findSplitBody(doc, paras);
+    if (split) {
+      doc.rvBodySamples = split.samples;
+      if (joinBody) for (let i = 1; i < split.boxes.length; i++) split.boxes[i - 1].after(split.boxes[i]);
+    }
 
     const share = new Map();
     for (const [p, n] of paras) {
@@ -284,6 +321,67 @@
   // stay. Blocks that really are clutter (related stories, promos, sign-ups) are left alone.
   const INLINE_JUNK =
     /related|promo|newsletter|sponsor|outbrain|taboola|recommend|advert|(^|[-_])ads?([-_]|$)|share|social|subscribe|signup|sign-up|teaser|more-from|read-more|most-popular|trending/i;
+
+  // Section headings wrapped together with an "edit" or anchor link (Wikipedia and other wikis:
+  // div.mw-heading > h2 + span.mw-editsection). Readability sees a short block that is mostly
+  // link and deletes it, heading included, so the article loses its sections and Reader its
+  // table of contents. Leave just the heading.
+  // Readability also deletes a heading whose id contains a word like "share", "media" or
+  // "related". When the id is simply the heading's own words (wikis: <h2 id="Media">Media</h2>)
+  // it says nothing about the page's layout, so it is set aside until after extraction.
+  function tidyHeadings(doc) {
+    if (!doc.body) return;
+    for (const h of [...doc.body.querySelectorAll("h2, h3, h4")]) {
+      if (h.id && MISLEADING.test(h.id) && loose(h.id) === loose(h.textContent)) {
+        h.setAttribute("data-rv-id", h.id);
+        h.removeAttribute("id");
+      }
+      const wrap = h.parentElement;
+      if (!wrap || wrap === doc.body || wrap.tagName !== "DIV" || !norm(h.textContent)) continue;
+      const others = [...wrap.children].filter((c) => c !== h);
+      const chrome = (c) => !norm(c.textContent) || c.matches('.mw-editsection, a[href^="#"]');
+      if (!others.every(chrome) || others.some((c) => c.querySelector("img, picture, video, iframe"))) continue;
+      if (norm(wrap.textContent).length > norm(h.textContent).length + 60) continue; // loose text beside it
+      wrap.replaceWith(h);
+    }
+  }
+
+  // Some sites cut the article body into several blocks with ads or sign-up boxes in between,
+  // each block in a wrapper of its own (Ars Technica: three div.post-content). Readability
+  // keeps one block and its next-door neighbours, so part of the article, often the opening,
+  // goes missing. This finds such blocks; extract() checks whether Readability kept them all
+  // and, only if it didn't, tries again with the blocks placed next to each other.
+  const NOT_BODY_BOX = /comment|reply|replies|discussion|teaser|card|related|promo|listing|sidebar|footer/i;
+  // Letters and digits only, so spacing, quote styles and markup don't affect comparisons.
+  const loose = (t) => (t || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+
+  function findSplitBody(doc, paras) {
+    const groups = new Map();
+    let total = 0;
+    for (const [p, n] of paras) {
+      total += n;
+      const box = p.parentElement;
+      const cls = box && box !== doc.body ? (box.getAttribute("class") || "").trim() : "";
+      if (!cls) continue;
+      const key = `${box.tagName} ${cls}`;
+      const g = groups.get(key) || { boxes: new Set(), n: 0 };
+      g.boxes.add(box);
+      g.n += n;
+      groups.set(key, g);
+    }
+    const best = [...groups].sort((a, b) => b[1].n - a[1].n)[0];
+    if (!best || NOT_BODY_BOX.test(best[0]) || best[1].n < total * 0.6) return null;
+    const boxes = [...best[1].boxes]; // in page order
+    if (boxes.length < 2 || boxes.length > 12) return null;
+    if (new Set(boxes.map((b) => b.parentElement)).size === 1) return null; // already side by side
+    if (boxes.some((a) => boxes.some((b) => a !== b && a.contains(b)))) return null;
+    // One article only: on a page listing several posts each block sits in its own <article>.
+    const region = boxes[0].closest("article") || boxes[0].closest('main, [role="main"], [itemprop="articleBody"]');
+    if (!region || !boxes.every((b) => region.contains(b))) return null;
+    // The start of each paragraph in the blocks, to check afterwards that none went missing.
+    const samples = paras.filter(([p]) => best[1].boxes.has(p.parentElement)).map(([p]) => loose(p.textContent).slice(0, 50));
+    return { boxes, samples };
+  }
 
   function protectInlineBlocks(doc, bodyParas) {
     const isBodyBlock = (n) => {
@@ -825,14 +923,29 @@
   // Many news sites embed the full article text as structured data (schema.org articleBody).
   // Only used when the site doesn't mark the article as paid: Reader shows what the reader
   // can already see, it doesn't unlock paywalls.
-  function structuredArticleBody() {
+  // title, frag: the article Reader extracted. A page can describe several articles in its data
+  // (the next story of an endless-scroll page, related stories), so a body is only accepted
+  // when it is this article's: its headline is the title, or it contains text Reader extracted.
+  function structuredArticleBody(title, frag) {
     let best = "";
+    const wanted = loose(title);
+    const samples = [...frag.querySelectorAll("p")]
+      .map((p) => loose(p.textContent))
+      .filter((t) => t.length >= 60)
+      .slice(0, 12)
+      .map((t) => t.slice(0, 50));
+    const matches = (o) => {
+      const headline = loose(typeof o.headline === "string" ? o.headline : typeof o.name === "string" ? o.name : "");
+      if (wanted.length >= 12 && headline.length >= 12 && (headline.includes(wanted) || wanted.includes(headline))) return true;
+      const body = loose(o.articleBody);
+      return samples.some((t) => body.includes(t));
+    };
     const paid = (o) => o.isAccessibleForFree === false || /^false$/i.test(String(o.isAccessibleForFree ?? ""));
     const visit = (o) => {
       if (!o || typeof o !== "object") return;
       if (Array.isArray(o)) return o.forEach(visit);
       if (paid(o)) return;
-      if (typeof o.articleBody === "string" && o.articleBody.length > best.length) best = o.articleBody;
+      if (typeof o.articleBody === "string" && o.articleBody.length > best.length && matches(o)) best = o.articleBody;
       if (o["@graph"]) visit(o["@graph"]);
       if (o.mainEntity) visit(o.mainEntity);
       if (o.hasPart) visit(o.hasPart);
@@ -864,7 +977,15 @@
 
   // Leftover ad/promo labels that survive extraction ("Ad Feedback", "Advertisement", ...).
   const JUNK_TEXT =
-    /^(ad feedback|advertisement|advertisements|advertising|ad|ads|sponsored( content)?|paid content|story continues below( advertisement)?|article continues below( advertisement)?|continue reading( below| the main story)?|skip advertisement|scroll to continue( with content)?|related( articles| stories| content)?:?|read more:?|recommended( for you| stories)?:?|most read|trending( now)?|listen to this article|share( this article)?|copy link|sign up for .{0,60}|subscribe.{0,60}|supported by|prime|premium|exclusive|subscriber only|.{0,50}\b\d+\s*min(ute)?s?\s*read)$/i;
+    /^(ad feedback|advertisement|advertisements|advertising|ad|ads|sponsored( content)?|paid content|story continues below( advertisement)?|article continues below( advertisement)?|continue reading( below| the main story)?|skip advertisement|scroll to continue( with content)?|related( articles| stories| content)?:?|read more:?|recommended( for you| stories)?:?|most read|trending( now)?|listen to this article|share( this article)?|copy link|sign up for .{0,60}|subscribe\b.{0,60}|supported by|prime|premium|exclusive|subscriber only|.{0,50}\b\d+\s*min(ute)?s?\s*read)$/i;
+  // Labels that are also ordinary words: a section called "Premium", a list item "Advertising".
+  const JUNK_BADGE = /^(advertising|ad|ads|share|prime|premium|exclusive)$/i;
+  // Page furniture that is never part of a sentence, so it can go even from inside a heading
+  // or paragraph ("Copy link" buttons in headings, "Read more" at the end of a paragraph).
+  const JUNK_INLINE =
+    /^(ad feedback|advertisement|advertisements|skip advertisement|copy link|read more:?|share this article|listen to this article|scroll to continue( with content)?|(story|article) continues below( advertisement)?|continue reading( below| the main story)?|.{0,50}\b\d+\s*min(ute)?s?\s*read)$/i;
+  const TEXT_BLOCK_SEL = "p, li, div, section, aside, figcaption, blockquote, td, th, dd, dt, h1, h2, h3, h4, h5, h6";
+  const ENDS_SENTENCE = /[.!?…]["”’)\]]*$/;
 
   // A quote paragraph followed by a short "— Name" line is a pull quote: show it as one.
   function markPullQuotes(frag) {
@@ -884,27 +1005,46 @@
 
   // Longer site boilerplate that sits at the end of articles.
   const SITE_PROMO =
-    /^(follow (topics|authors|this author|the author|us)\b|(follow topics and authors )?from this story to see more like this|get the latest .{0,60} (in|to) your inbox|sign up for (our|the) .{0,40}newsletter|this story (was|has been) updated|most popular\b|more from\b|you might also like\b|why you can trust\b)/i;
+    /^(follow (topics|authors|this author|the author|us)\b|(follow topics and authors )?from this story to see more like this|get the latest .{0,60} (in|to) your inbox|sign up for (our|the) .{0,40}newsletter|this story (was|has been) updated|most popular\b|more from\b|you might also like\b|why you can trust\b|add us as a preferred source\b)/i;
 
   function removeJunk(frag) {
     // Site promos: remove the whole paragraph/block, not just the inner element that matched.
     for (const n of [...frag.querySelectorAll("p, li, div, section, aside")]) {
       if (!n.parentNode || n.querySelector("img, picture, video, iframe, p") || n.closest(".code-block, .procon")) continue;
       const t = (n.textContent || "").replace(/\s+/g, " ").trim();
-      if (t.length && t.length < 300 && SITE_PROMO.test(t)) n.remove();
+      if (!t.length || t.length >= 300 || !SITE_PROMO.test(t)) continue;
+      // "Most popular" and "More from The Verge" are labels; "Most popular among the new
+      // features was offline reading." is a sentence of the article.
+      if (/^(most popular|more from)\b/i.test(t) && ENDS_SENTENCE.test(t)) continue;
+      n.remove();
     }
     const nodes = [...frag.querySelectorAll("p, div, span, section, aside, h2, h3, h4, h5, h6, li, a, figcaption, button, strong")].reverse();
     for (const n of nodes) {
       if (!n.parentNode || n.closest(".code-block, .procon")) continue;
       const t = (n.textContent || "").replace(/\s+/g, " ").trim();
       if (!t.length || n.querySelector("img, picture, video, iframe")) continue;
-      if (t.length < 90 && JUNK_TEXT.test(t)) n.remove();
+      if (t.length >= 90 || !JUNK_TEXT.test(t)) continue;
+      // A word inside a sentence ("Google's <a>advertising</a> business", "you can
+      // <a>subscribe</a> here") is the article's own text: such labels are only removed when
+      // they stand alone in their block.
+      if (/^(A|SPAN|STRONG|BUTTON)$/.test(n.tagName) && !JUNK_INLINE.test(t)) {
+        const block = n.parentElement && n.parentElement.closest(TEXT_BLOCK_SEL);
+        if (block && norm(block.textContent) !== norm(t)) continue;
+      }
+      // Headings and list items named "Premium", "Share" and the like are content.
+      if (JUNK_BADGE.test(t) && (n.closest("h1, h2, h3, h4, h5, h6, li, td, th") || n.querySelector("h1, h2, h3, h4, h5, h6, li"))) continue;
+      n.remove();
     }
     // Short author-box lines ("Correspondent", "Nation Media Group") above the first paragraph.
-    for (const p of [...frag.querySelectorAll("p")]) {
+    // They sit in a box of their own. Short lines that are next to the article's paragraphs
+    // are the article itself ("It was over."), as are captions and quotes.
+    const allParas = [...frag.querySelectorAll("p")];
+    const firstLong = allParas.find((p) => p.textContent.replace(/\s+/g, " ").trim().length > 100);
+    for (const p of firstLong ? allParas : []) {
+      if (p === firstLong) break;
+      if (p.parentNode === firstLong.parentNode || p.closest("figure, figcaption, blockquote, table, .procon, .code-block")) continue;
       const len = p.textContent.replace(/\s+/g, " ").trim().length;
-      if (len > 100) break;
-      if (len < 40 && !p.querySelector("img, picture, a") && !p.closest(".procon") && !p.hasAttribute("data-rv-score")) p.remove();
+      if (len < 40 && !p.querySelector("img, picture, a") && !p.hasAttribute("data-rv-score")) p.remove();
     }
     // Collapse containers left empty.
     for (const n of [...frag.querySelectorAll("div, section, p, figure, span, li, ul, ol")].reverse()) {
@@ -916,7 +1056,17 @@
       const t = (list.textContent || "").replace(/\s+/g, " ").trim();
       const linkText = [...list.querySelectorAll("a")].reduce((n, a) => n + a.textContent.replace(/\s+/g, " ").trim().length, 0);
       const buttons = list.querySelectorAll('[role="button"], button').length;
-      if (t.length && linkText / t.length > 0.8 && list.children.length <= 8) list.remove();
+      // "Related stories" lead back to the same site. A short list of links to other sites
+      // (sources, further reading) is part of the article.
+      const links = [...list.querySelectorAll("a[href]")];
+      const sameSite = links.filter((a) => {
+        try {
+          return new URL(a.getAttribute("href"), location.href).hostname === location.hostname;
+        } catch {
+          return true;
+        }
+      }).length;
+      if (t.length && linkText / t.length > 0.8 && list.children.length <= 8 && sameSite * 2 >= links.length) list.remove();
       else if (buttons && buttons >= list.children.length && t.length < 400) list.remove();
     }
   }
@@ -999,6 +1149,18 @@
     return "";
   }
 
+  // An inline SVG image with nothing drawn in it: the stand-in a lazy-loader shows until the
+  // real photo arrives (e.g. data:image/svg+xml,<svg viewBox='0 0 1600 1067' …></svg>).
+  function blankSvg(src) {
+    const m = /^data:image\/svg\+xml([^,]*),(.*)$/is.exec(src || "");
+    if (!m) return false;
+    let svg = m[2];
+    try {
+      svg = /;base64/i.test(m[1]) ? atob(svg) : decodeURIComponent(svg);
+    } catch {}
+    return !/<(path|rect|circle|ellipse|line|polyline|polygon|image|text|use|g)\b/i.test(svg);
+  }
+
   // Many sites put the main photo in a hero section above the article body, outside the
   // container Readability keeps. Like Safari, bring it back as the lead image.
   function addLeadImage(frag) {
@@ -1039,7 +1201,9 @@
     const existing = new Set([...frag.querySelectorAll("img")].map((i) => i.src));
     let best = null;
     let bestArea = 0;
-    for (const img of document.querySelectorAll("img")) {
+    // Without the article's first paragraph there is no telling which images sit above the
+    // text, and the largest image on the page may be an ad or a pop-up's picture.
+    for (const img of anchor ? document.querySelectorAll("img") : []) {
       if (img.closest(`#${HOST_ID}, header nav, nav, footer, aside, [role="banner"] a, [role="navigation"]`)) continue;
       // Must come before the article text (hero position).
       if (anchor && !(img.compareDocumentPosition(anchor) & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
@@ -1049,7 +1213,8 @@
       if (w < 400 || h < 200) continue;
       const src = img.currentSrc || img.src;
       // Skip tiny inline placeholders (lazy-load stand-ins); allow real inline images.
-      if (!src || existing.has(src) || (src.startsWith("data:") && img.naturalWidth < 400)) continue;
+      // (Lazy-loaders also use an empty inline SVG that claims the photo's full size.)
+      if (!src || existing.has(src) || (src.startsWith("data:") && (img.naturalWidth < 400 || blankSvg(src)))) continue;
       if (w * h > bestArea) {
         best = img;
         bestArea = w * h;
@@ -1166,8 +1331,23 @@
   }
 
   function extract() {
+    const parse = (doc) => new Readability(doc, { charThreshold: 300, allowedVideoRegex: EMBED_RE }).parse();
     const clone = prepareClone();
-    const article = new Readability(clone, { charThreshold: 300, allowedVideoRegex: EMBED_RE }).parse();
+    const bodySamples = clone.rvBodySamples; // read now: Readability takes the clone apart
+    let article = parse(clone);
+    // An article body the site cut into separate blocks: if Readability kept only some of
+    // them, try once more with the blocks side by side and keep whichever holds more of it.
+    if (bodySamples && bodySamples.length >= 4) {
+      const kept = (a) => {
+        const text = a && a.content ? loose(a.textContent) : "";
+        return bodySamples.filter((t) => text.includes(t)).length / bodySamples.length;
+      };
+      const before = kept(article);
+      if (before < 0.7) {
+        const retry = parse(prepareClone(true));
+        if (kept(retry) > before) article = retry;
+      }
+    }
     if (!article || !article.content) return null;
     article.title = withoutSiteName(article.title, article.siteName);
 
@@ -1177,7 +1357,7 @@
 
     // If the page carries a much longer full text in its structured data (common on paywalled
     // sites), use that for the body and keep the lead image Readability found.
-    const ldBody = structuredArticleBody();
+    const ldBody = structuredArticleBody(article.title, frag);
     const extractedLen = (frag.textContent || "").replace(/\s+/g, " ").trim().length;
     if (ldBody.length > 800 && ldBody.length > extractedLen * 1.4) {
       const lead = frag.querySelector("figure, picture, img");
@@ -1206,12 +1386,22 @@
     // Drop a short leading byline/dateline block, since the header already shows it.
     const bylineKey = norm(article.byline).replace(/^by\s+/, "");
     if (bylineKey) {
-      const leading = [...frag.querySelectorAll("p, div, span, address, time")].slice(0, 6);
+      // Look above the article's first full paragraph (photo captions and credits aside),
+      // rather than at a fixed number of elements, which a caption could use up.
+      const firstLong = [...frag.querySelectorAll("p")].find((p) => p.textContent.replace(/\s+/g, " ").trim().length > 100);
+      const leading = [...frag.querySelectorAll("p, div, span, address, time")]
+        .filter((n) => !n.closest("figure") && (!firstLong || n.compareDocumentPosition(firstLong) & Node.DOCUMENT_POSITION_FOLLOWING))
+        .slice(0, firstLong ? 12 : 6);
       const dup = leading.find((n) => {
         const t = norm(n.textContent);
         return t.length > 0 && t.length < 120 && t.includes(bylineKey) && !n.querySelector("img, p");
       });
-      if (dup) dup.remove();
+      // Remove it together with any list item or wrapper it leaves empty.
+      for (let n = dup; n && n.parentNode; ) {
+        const parent = n.parentElement;
+        n.remove();
+        n = parent && !norm(parent.textContent) && !parent.querySelector("img, picture, video, iframe, svg") ? parent : null;
+      }
     }
 
     addLeadImage(frag);
@@ -1482,6 +1672,12 @@
       }
     });
 
+    // Heading ids set aside before extraction (see tidyHeadings); links to "#Media" need them.
+    frag.querySelectorAll("[data-rv-id]").forEach((n) => {
+      n.id = n.getAttribute("data-rv-id");
+      n.removeAttribute("data-rv-id");
+    });
+
     finishEmbeds(frag);
     finishCode(frag);
     removeIcons(frag);
@@ -1616,6 +1812,7 @@
       // Find the following page's link before Readability rewrites the document.
       const followHref = next;
       const parseDoc = nextDoc.cloneNode(true);
+      tidyHeadings(parseDoc);
       normalizePullQuotes(parseDoc);
       normalizeCode(parseDoc, next);
       normalizeEmbeds(parseDoc, next);
@@ -1837,7 +2034,11 @@
     if (!iso) return "";
     const d = new Date(iso);
     if (isNaN(d)) return "";
-    return d.toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+    const options = { year: "numeric", month: "long", day: "numeric" };
+    // "2024-05-01" (or the same with a midnight-UTC time) names a day, not a moment. JavaScript
+    // reads it as midnight UTC, which is still the day before anywhere west of Greenwich.
+    if (/^\d{4}-\d{2}-\d{2}(T00:00(:00(\.0+)?)?(Z|[+-]00:?00))?$/.test(String(iso).trim())) options.timeZone = "UTC";
+    return d.toLocaleDateString(undefined, options);
   }
 
   // ---------- appearance ----------
@@ -2453,9 +2654,29 @@
       html, html > #${HOST_ID} { position: static !important; overflow: visible !important; height: auto !important; }
     }`;
     (document.head || document.documentElement).append(printStyle);
+    // The rules above can't override the inline "!important" styles that pin Reader over the
+    // page (and stop the page scrolling), so without this only the first sheet would print.
+    // Unpin while printing, pin again afterwards.
+    const printQuery = window.matchMedia("print");
+    const setPrinting = (printing) => {
+      host.style.setProperty("position", printing ? "static" : "fixed", "important");
+      document.documentElement.style.setProperty("overflow", printing ? "visible" : "hidden", "important");
+      if (document.body) document.body.style.setProperty("overflow", printing ? "visible" : "hidden", "important");
+    };
+    const onPrintQuery = () => setPrinting(printQuery.matches);
+    const onBeforePrint = () => setPrinting(true);
+    const onAfterPrint = () => setPrinting(false);
+    printQuery.addEventListener("change", onPrintQuery);
+    window.addEventListener("beforeprint", onBeforePrint);
+    window.addEventListener("afterprint", onAfterPrint);
+    const stopPrintWatch = () => {
+      printQuery.removeEventListener("change", onPrintQuery);
+      window.removeEventListener("beforeprint", onBeforePrint);
+      window.removeEventListener("afterprint", onAfterPrint);
+    };
 
     ui = {
-      host, root, reader, prev, printStyle, popover: pop.popover, aaBtn, ...pop,
+      host, root, reader, prev, printStyle, stopPrintWatch, popover: pop.popover, aaBtn, ...pop,
       content: built.content, loader: built.loader,
       sidebar: side.sidebar, tocList: side.tocList, tocSection: side.tocSection, summary: side.summary, hasSummary: false, sidebarBtn,
       lb, lbIndex: 0, lightboxOpen: false,
@@ -2616,8 +2837,9 @@
     if (!ui) return;
     clearTimeout(ui.posTimer);
     savePosition();
-    const { host, reader, prev, printStyle, onKey, onResize, resizeObserver } = ui;
+    const { host, reader, prev, printStyle, stopPrintWatch, onKey, onResize, resizeObserver } = ui;
     ui = null;
+    stopPrintWatch();
 
     window.removeEventListener("message", onEmbedMessage);
     window.removeEventListener("keydown", onKey, true);

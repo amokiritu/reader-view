@@ -88,8 +88,11 @@
   urlTimer = setInterval(() => {
     if (orphaned()) return shutDown();
     if (location.href !== lastUrl) {
+      // A jump within the page (#section) is still the same article: if the reader closed
+      // Reader here, don't open it on them again.
+      const samePage = location.href.split("#")[0] === lastUrl.split("#")[0];
       lastUrl = location.href;
-      autoOpened = false;
+      if (!samePage) autoOpened = false;
       setTimeout(() => {
         check(true);
         if (!lastResult) watch();
