@@ -199,10 +199,35 @@
       aside.replaceWith(div);
     }
     normalizePullQuotes(clone);
+    normalizeScoreBadges(clone);
     normalizeCode(clone, location.href);
     normalizeEmbeds(clone, location.href);
     protectArticleAncestors(clone);
     return clone;
+  }
+
+  // Score badges drawn as a number beside a logo ("7.9" + the "CNET Score" wordmark): the logo
+  // can't be shown and Readability drops the bare number, so keep the badge as a line of text
+  // that the pros-and-cons box picks up.
+  function normalizeScoreBadges(doc) {
+    for (const svg of [...doc.body.querySelectorAll("svg[aria-label]")]) {
+      const label = (svg.getAttribute("aria-label") || "").replace(/\s+/g, " ").trim();
+      if (!/^[\w .&'’-]{0,25}\b(score|rating)$/i.test(label) || !svg.parentNode) continue;
+      let badge = svg.parentElement;
+      for (let i = 0; badge && i < 3; i++, badge = badge.parentElement) {
+        const t = norm(badge.textContent);
+        if (/^\d{1,3}(\.\d)?$/.test(t)) break;
+        if (t.length > 10) {
+          badge = null;
+          break;
+        }
+      }
+      if (!badge || badge === doc.body) continue;
+      const p = doc.createElement("p");
+      p.setAttribute("data-rv-score", "");
+      p.textContent = `${norm(badge.textContent)} ${label}`;
+      badge.replaceWith(p);
+    }
   }
 
   // An <aside> that is really article text: paragraphs with few links, sitting among other
@@ -879,7 +904,7 @@
     for (const p of [...frag.querySelectorAll("p")]) {
       const len = p.textContent.replace(/\s+/g, " ").trim().length;
       if (len > 100) break;
-      if (len < 40 && !p.querySelector("img, picture, a") && !p.closest(".procon")) p.remove();
+      if (len < 40 && !p.querySelector("img, picture, a") && !p.closest(".procon") && !p.hasAttribute("data-rv-score")) p.remove();
     }
     // Collapse containers left empty.
     for (const n of [...frag.querySelectorAll("div, section, p, figure, span, li, ul, ol")].reverse()) {
@@ -982,6 +1007,8 @@
       (n) => !n.closest(".procon, .code-block")
     );
     if (firstBlock && /^(IMG|PICTURE|VIDEO|IFRAME|FIGURE)$/.test(firstBlock.tagName)) return;
+    // …including a photo on its own in a paragraph (<p><img></p>).
+    if (firstBlock && firstBlock.tagName === "P" && !norm(firstBlock.textContent) && firstBlock.querySelector("img, picture")) return;
 
     // Locate the article's first paragraph on the live page.
     const firstText = norm([...frag.querySelectorAll("p")].find((p) => p.textContent.trim().length > 60)?.textContent).slice(0, 80);
@@ -1125,10 +1152,24 @@
     if (media) media.classList.add("lead-media");
   }
 
+  // "Apple TV 4K Review - CNET": the site's name after the headline. Reader shows the site
+  // separately, so drop it when it matches the site's name or web address.
+  function withoutSiteName(title, siteName) {
+    const t = (title || "").trim();
+    const m = /^(.{10,}?)\s+[-|–—·»]\s+([^-|–—·»]{2,40})$/.exec(t);
+    if (!m) return t;
+    const squash = (s) => norm(s).replace(/[^a-z0-9]/g, "");
+    const tail = squash(m[2]);
+    const site = squash(siteName);
+    const host = squash(location.hostname.replace(/^www\./, "").split(".")[0]);
+    return tail && (tail === site || tail === host || (site.length > 3 && site.startsWith(tail))) ? m[1].trim() : t;
+  }
+
   function extract() {
     const clone = prepareClone();
     const article = new Readability(clone, { charThreshold: 300, allowedVideoRegex: EMBED_RE }).parse();
     if (!article || !article.content) return null;
+    article.title = withoutSiteName(article.title, article.siteName);
 
     const tpl = document.createElement("template");
     tpl.innerHTML = article.content;
@@ -1277,6 +1318,18 @@
 
   function markProsCons(frag) {
     const doc = frag.ownerDocument || document;
+    // Lists named only for screen readers (CNET's <ul aria-label="Pros">) get a visible label.
+    for (const list of [...frag.querySelectorAll("ul[aria-label], ol[aria-label]")]) {
+      const t = list.getAttribute("aria-label").replace(/\s+/g, " ").trim();
+      if (!PRO_LABEL.test(t) && !CON_LABEL.test(t)) continue;
+      const prev = list.previousElementSibling;
+      const prevText = prev ? prev.textContent.replace(/\s+/g, " ").trim() : "";
+      if (PRO_LABEL.test(prevText) || CON_LABEL.test(prevText)) continue;
+      const h = doc.createElement("h4");
+      h.textContent = t[0].toUpperCase() + t.slice(1);
+      list.before(h);
+    }
+
     const units = [];
     for (const label of [...frag.querySelectorAll("figcaption, h2, h3, h4, h5, h6, p, strong, b, span, div, dt")]) {
       if (label.closest(".procon")) continue;
@@ -1324,6 +1377,22 @@
         box.append(b.unit);
         placed.add(b.unit);
       }
+    }
+
+    // A "Pros & Cons" heading over the box repeats what the box says. CNET also puts the box
+    // in a collapsible section; show it open, without the toggle.
+    const OVER = /^(pros\s*(&|and|\+)\s*cons|the good\s*(&|and)\s*the bad)$/;
+    for (const box of frag.querySelectorAll(".procon")) {
+      const details = box.closest("details");
+      const summary = details && [...details.children].find((c) => c.tagName === "SUMMARY");
+      if (details && (!summary || norm(summary.textContent).length < 40)) {
+        summary?.remove();
+        details.replaceWith(...details.childNodes);
+        continue;
+      }
+      let prev = box.previousElementSibling;
+      for (let a = box; !prev && a.parentElement && a.parentElement !== frag; a = a.parentElement) prev = a.parentElement.previousElementSibling;
+      if (prev && /^H[2-6]$/.test(prev.tagName) && OVER.test(norm(prev.textContent))) prev.remove();
     }
   }
 
@@ -1378,9 +1447,13 @@
         }
         used.add(t);
         const full = /^(.{0,25}?)[\s:：]*(\d{1,3}(?:\.\d)?)\s*(?:\/|out of)\s*(\d{1,3})$/i.exec(t);
+        const numberFirst = /^(\d{1,3}(?:\.\d)?)\s+(.{0,25}\b(?:score|rating))$/i.exec(t); // "7.9 CNET Score"
         if (!score && full && (!full[1] || /\b(score|rating)\b/i.test(full[1]))) {
           score = `${full[2]} / ${full[3]}`;
           if (full[1] && !label) label = tidy(full[1]);
+        } else if (!score && numberFirst) {
+          score = numberFirst[1];
+          if (!label) label = tidy(numberFirst[2]);
         } else if (!score && /^\d{1,3}(\.\d)?$/.test(t)) score = t;
         else if (!label && t.length < 30 && /\b(score|rating)\b/i.test(t)) label = tidy(t);
         else if (!price && /^[$€£¥]\s?\d[\d,.]*$/.test(t)) price = t;
