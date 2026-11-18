@@ -257,6 +257,42 @@
 }
 .content figcaption [data-rv-credit] { color: var(--muted); font-style: italic; }
 
+/* Review scorecards: pros and cons side by side, with ✓ and ✕ marks. */
+.content .procon {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4em 1.8em;
+  margin: 1.4em 0 1.8em;
+  padding: 1em 1.3em 1.1em;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  font-size: 0.9em;
+  line-height: 1.45;
+}
+.content .procon.single { grid-template-columns: 1fr; }
+.content .procon-rating {
+  grid-column: 1 / -1;
+  margin: -0.2em 0 0.6em;
+  padding-bottom: 0.6em;
+  border-bottom: 1px solid var(--rule);
+  font-size: 1.05em;
+}
+@media (max-width: 640px) { .content .procon { grid-template-columns: 1fr; } }
+.content .procon > *, .content .procon figure { margin: 0; }
+.content [data-rv-procon-label] {
+  margin: 0 0 0.5em;
+  font: inherit;
+  font-weight: 600;
+  font-size: 1em;
+  color: var(--text);
+  text-align: left;
+}
+.content ul[data-rv-procon], .content ol[data-rv-procon] { list-style: none; margin: 0; padding: 0; }
+.content [data-rv-procon] li { position: relative; margin: 0.35em 0; padding-left: 1.5em; }
+.content [data-rv-procon] li::before { position: absolute; left: 0; font-weight: 700; }
+.content [data-rv-procon="pro"] li::before { content: "✓"; color: #2e9d6b; }
+.content [data-rv-procon="con"] li::before { content: "✕"; color: #d2453b; }
+
 /* First image runs edge to edge across the card. */
 .content .lead-media {
   margin-left: calc(-1 * var(--pad));

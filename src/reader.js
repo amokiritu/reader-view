@@ -836,13 +836,13 @@
   function removeJunk(frag) {
     // Site promos: remove the whole paragraph/block, not just the inner element that matched.
     for (const n of [...frag.querySelectorAll("p, li, div, section, aside")]) {
-      if (!n.parentNode || n.querySelector("img, picture, video, iframe, p") || n.closest(".code-block")) continue;
+      if (!n.parentNode || n.querySelector("img, picture, video, iframe, p") || n.closest(".code-block, .procon")) continue;
       const t = (n.textContent || "").replace(/\s+/g, " ").trim();
       if (t.length && t.length < 300 && SITE_PROMO.test(t)) n.remove();
     }
     const nodes = [...frag.querySelectorAll("p, div, span, section, aside, h2, h3, h4, h5, h6, li, a, figcaption, button, strong")].reverse();
     for (const n of nodes) {
-      if (!n.parentNode || n.closest(".code-block")) continue;
+      if (!n.parentNode || n.closest(".code-block, .procon")) continue;
       const t = (n.textContent || "").replace(/\s+/g, " ").trim();
       if (!t.length || n.querySelector("img, picture, video, iframe")) continue;
       if (t.length < 90 && JUNK_TEXT.test(t)) n.remove();
@@ -851,11 +851,11 @@
     for (const p of [...frag.querySelectorAll("p")]) {
       const len = p.textContent.replace(/\s+/g, " ").trim().length;
       if (len > 100) break;
-      if (len < 40 && !p.querySelector("img, picture, a")) p.remove();
+      if (len < 40 && !p.querySelector("img, picture, a") && !p.closest(".procon")) p.remove();
     }
     // Collapse containers left empty.
     for (const n of [...frag.querySelectorAll("div, section, p, figure, span, li, ul, ol")].reverse()) {
-      if (n.parentNode && !n.textContent.trim() && !n.querySelector("img, picture, video, iframe, svg, hr, table") && !n.closest(".code-block")) n.remove();
+      if (n.parentNode && !n.textContent.trim() && !n.querySelector("img, picture, video, iframe, svg, hr, table") && !n.closest(".code-block, .procon")) n.remove();
     }
     // "Related stories" link lists and "Follow <author>" button lists inside the body.
     for (const list of [...frag.querySelectorAll("ul, ol")]) {
@@ -1085,6 +1085,7 @@
     }
 
     sanitizeFragment(frag, article.title);
+    addRatingToProsCons(frag);
     article.dek = findDek(article, frag);
 
     // Drop a short leading byline/dateline block, since the header already shows it.
@@ -1120,6 +1121,126 @@
     return s === "data" && attr === "src" && (tag === "IMG" || tag === "SOURCE") && /^data:image\/(png|gif|jpe?g|webp|avif|svg\+xml)[;,]/i.test(v);
   }
 
+  // Icons drawn from the page's icon sheet (<svg><use href="#thumbsup">) can't render inside
+  // Reader, and an <svg> without a size defaults to 300×150, leaving big empty gaps (e.g.
+  // Engadget's pros and cons). Drop sprite icons and small inline icons sitting beside text.
+  function removeIcons(frag) {
+    for (const svg of [...frag.querySelectorAll("svg")]) {
+      const shapes = svg.querySelectorAll("path, rect, circle, ellipse, line, polyline, polygon, text, image, g");
+      const spriteOnly = svg.querySelector("use") && !shapes.length;
+      const parent = svg.parentElement;
+      const besideText = parent && norm(parent.textContent).length > 0 && !svg.getAttribute("width") && !svg.getAttribute("height");
+      if (spriteOnly || besideText || !shapes.length) svg.remove();
+    }
+  }
+
+  // Review scorecards: "Pros"/"Cons" (or "The Good"/"The Bad") labels, each followed by a
+  // list. Show them as one tidy box with ✓ and ✕ marks instead of captions and loose lists.
+  const PRO_LABEL = /^(pros|the good|likes|what we like|we like|positives|strengths|pluses|the positives)\s*:?$/i;
+  const CON_LABEL = /^(cons|the bad|dislikes|what we don'?t like|we don'?t like|negatives|weaknesses|minuses|the negatives)\s*:?$/i;
+
+  function markProsCons(frag) {
+    const doc = frag.ownerDocument || document;
+    const units = [];
+    for (const label of [...frag.querySelectorAll("figcaption, h2, h3, h4, h5, h6, p, strong, b, span, div, dt")]) {
+      if (label.closest(".procon")) continue;
+      const t = label.textContent.replace(/\s+/g, " ").trim();
+      const kind = PRO_LABEL.test(t) ? "pro" : CON_LABEL.test(t) ? "con" : "";
+      if (!kind || label.querySelector("ul, ol, p, h2, h3, h4")) continue;
+      // The label may be wrapped (<p><strong>Pros</strong></p>); the list follows the wrapper.
+      let host = label;
+      while (host.parentElement && host.parentElement !== frag && norm(host.parentElement.textContent) === norm(t)) host = host.parentElement;
+      let list = host.nextElementSibling;
+      while (list && !/^(UL|OL)$/.test(list.tagName) && !norm(list.textContent)) list = list.nextElementSibling;
+      if (!list || !/^(UL|OL)$/.test(list.tagName) || host.hasAttribute("data-rv-procon-label")) continue;
+      host.setAttribute("data-rv-procon-label", kind);
+      list.setAttribute("data-rv-procon", kind);
+      // Group the label and its list; widen to a wrapper that holds just the two.
+      let unit = host.parentElement;
+      if (!unit || unit === frag || [...unit.children].some((c) => c !== host && c !== list && norm(c.textContent))) {
+        unit = doc.createElement("div");
+        host.before(unit);
+        unit.append(host, list);
+      }
+      units.push({ unit, kind });
+    }
+    // A pros unit followed by a cons unit (or the reverse) share one box, side by side.
+    const placed = new Set();
+    for (let i = 0; i < units.length; i++) {
+      if (placed.has(units[i].unit)) continue;
+      const a = units[i].unit;
+      let next = a.nextElementSibling;
+      while (next && !norm(next.textContent) && !next.querySelector("img")) next = next.nextElementSibling;
+      const b = units.find((u) => u.unit === next && u.kind !== units[i].kind);
+      const box = doc.createElement("div");
+      box.className = "procon" + (b ? "" : " single");
+      a.before(box);
+      box.append(a);
+      placed.add(a);
+      if (b) {
+        box.append(b.unit);
+        placed.add(b.unit);
+      }
+    }
+  }
+
+  // The review's score, from the page's structured data (e.g. Engadget's "8.3 / 10"), shown at
+  // the top of the pros-and-cons box. Readability usually drops the site's own score badge.
+  function reviewRating() {
+    let found = null;
+    const visit = (o) => {
+      if (found || !o || typeof o !== "object") return;
+      if (Array.isArray(o)) return o.forEach(visit);
+      const r = o.reviewRating;
+      if (r && typeof r === "object" && r.ratingValue != null) {
+        const value = parseFloat(r.ratingValue);
+        const best = parseFloat(r.bestRating ?? 5);
+        if (isFinite(value) && isFinite(best) && best > 0 && value >= 0 && value <= best) found = { value, best };
+      }
+      if (o["@graph"]) visit(o["@graph"]);
+      if (o.mainEntity) visit(o.mainEntity);
+    };
+    document.querySelectorAll('script[type="application/ld+json"]').forEach((s) => {
+      try {
+        visit(JSON.parse(s.textContent));
+      } catch {}
+    });
+    return found;
+  }
+
+  function addRatingToProsCons(frag) {
+    const box = frag.querySelector(".procon");
+    if (!box) return;
+    // The site's score badge often survives as loose lines just above the box: "8",
+    // "Verge Score", "$699". Fold them into the box's top line instead.
+    const leaves = [...frag.querySelectorAll("p, div, span, h3, h4, h5")].filter(
+      (n) => !box.contains(n) && n.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING && !n.querySelector("p, div, img, picture, figure, ul, ol, h2, h3, h4, iframe")
+    );
+    let label = "";
+    let score = "";
+    let price = "";
+    const used = new Set();
+    for (const n of leaves.slice(-8).reverse()) {
+      const t = n.textContent.replace(/\s+/g, " ").trim();
+      if (!t || used.has(t)) {
+        if (t) n.remove(); // the same badge text repeated (wrapper and inner span, or two prices)
+        continue;
+      }
+      used.add(t);
+      if (!score && /^\d{1,3}(\.\d)?$/.test(t)) score = t;
+      else if (!label && t.length < 30 && /\b(score|rating)\b/i.test(t)) label = t.replace(/[:：]\s*$/, "");
+      else if (!price && /^[$€£¥]\s?\d[\d,.]*$/.test(t)) price = t;
+      else break;
+      n.remove();
+    }
+    const r = reviewRating();
+    const parts = [];
+    if (r) parts.push(`${label || "Rating"}: `, el("strong", { text: `${r.value} / ${r.best}` }));
+    else if (score) parts.push(`${label || "Score"}: `, el("strong", { text: score }));
+    if (price) parts.push(parts.length ? ` · ${price}` : price);
+    if (parts.length) box.prepend(el("div", { class: "procon-rating" }, parts));
+  }
+
   // Cleanup shared by the first page and any later pages of a multi-page article.
   function sanitizeFragment(frag, title) {
     // Nothing in the Reader copy may run code: drop active elements, event handlers, inline
@@ -1136,6 +1257,8 @@
 
     finishEmbeds(frag);
     finishCode(frag);
+    removeIcons(frag);
+    markProsCons(frag);
     removeJunk(frag);
     markPullQuotes(frag);
     for (const bq of frag.querySelectorAll("blockquote[data-rv-pull]")) {
