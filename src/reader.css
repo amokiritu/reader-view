@@ -296,6 +296,15 @@ img.lead-media,
   line-height: 1.45;
 }
 .content blockquote.pull p { margin: 0 0 0.35em; }
+.content blockquote.pull p:last-child { margin-bottom: 0; }
+/* A line lifted from the article itself: set large, like the site does. */
+.content blockquote.pull.lifted {
+  font-size: 1.3em;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+.content blockquote.pull.lifted .attribution { font-weight: 400; letter-spacing: 0; }
 .content blockquote.pull .attribution {
   margin: 0;
   font-size: 0.72em;

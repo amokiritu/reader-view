@@ -198,6 +198,7 @@
       div.append(...aside.childNodes);
       aside.replaceWith(div);
     }
+    normalizePullQuotes(clone);
     normalizeCode(clone, location.href);
     normalizeEmbeds(clone, location.href);
     protectArticleAncestors(clone);
@@ -391,6 +392,38 @@
     const tw = d && d["twttr.embed"];
     const h = tw ? tw.method === "twttr.private.resize" && tw.params && tw.params[0] && tw.params[0].height : d && d.height;
     if (h > 50 && h < 4000) frame.style.height = Math.ceil(h) + "px";
+  }
+
+  // ---------- pull quotes ----------
+  // A line lifted from the article and set large on the page ("Refresh rates matter!").
+  // Readability strips the class that marks it, leaving what looks like a stray one-line
+  // paragraph. Turn it into a blockquote tagged for Reader's pull-quote style.
+  function normalizePullQuotes(doc) {
+    if (!doc.body) return;
+    const sel = '[class*="pullquote" i], [class*="pull-quote" i], [class*="pull_quote" i]';
+    for (const q of [...doc.body.querySelectorAll(sel)]) {
+      if (!doc.body.contains(q)) continue; // inside a pull quote already converted
+      const text = norm(q.textContent);
+      if (!text || text.length > 400 || q.querySelector("img, picture, video, iframe, h1, h2")) continue;
+      // Quote text, and the person quoted if the site names them (<cite>, WordPress style).
+      const cite = q.querySelector("cite, figcaption, [class*='attribution' i], [class*='credit' i]");
+      const citeText = cite ? cite.textContent.replace(/\s+/g, " ").trim() : "";
+      if (cite) cite.remove();
+      const quoteText = q.textContent.replace(/\s+/g, " ").trim();
+      if (!quoteText) continue;
+      const bq = doc.createElement("blockquote");
+      bq.setAttribute("data-rv-pull", "");
+      const p = doc.createElement("p");
+      p.textContent = quoteText;
+      bq.append(p);
+      if (citeText) {
+        const a = doc.createElement("p");
+        a.setAttribute("data-rv-attribution", "");
+        a.textContent = /^[—–-]/.test(citeText) ? citeText : "— " + citeText;
+        bq.append(a);
+      }
+      q.replaceWith(bq);
+    }
   }
 
   // ---------- code: GitHub Gists and code blocks ----------
@@ -1034,6 +1067,10 @@
     finishCode(frag);
     removeJunk(frag);
     markPullQuotes(frag);
+    for (const bq of frag.querySelectorAll("blockquote[data-rv-pull]")) {
+      bq.classList.add("pull", "lifted");
+      bq.querySelector("[data-rv-attribution]")?.classList.add("attribution");
+    }
 
     // Drop a leading heading that just repeats the title (we render the title ourselves).
     const firstHeading = frag.querySelector("h1, h2");
@@ -1157,6 +1194,7 @@
       // Find the following page's link before Readability rewrites the document.
       const followHref = next;
       const parseDoc = nextDoc.cloneNode(true);
+      normalizePullQuotes(parseDoc);
       normalizeCode(parseDoc, next);
       normalizeEmbeds(parseDoc, next);
       protectArticleAncestors(parseDoc);
