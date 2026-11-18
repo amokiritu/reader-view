@@ -2529,12 +2529,25 @@
 
   function makeHost() {
     document.getElementById(HOST_ID)?.remove();
+    document.getElementById(PRINT_STYLE_ID)?.remove();
+    // Reader is pinned over the page by a stylesheet, not inline styles: inline "!important"
+    // would beat the print rules, and then only the first sheet prints. Some browsers (Dia)
+    // print without announcing it to the page, so this can't wait for a "beforeprint" event.
+    // When printing, only Reader's article prints (like Safari's "Print" while in Reader).
+    const style = document.createElement("style");
+    style.id = PRINT_STYLE_ID;
+    style.textContent = `html > #${HOST_ID} {
+      all: initial !important; display: block !important; position: fixed !important;
+      inset: 0 !important; z-index: 2147483647 !important;
+    }
+    @media print {
+      html > body { display: none !important; }
+      html > #${HOST_ID} { position: static !important; height: auto !important; }
+      html { overflow: visible !important; height: auto !important; }
+    }`;
+    (document.head || document.documentElement).append(style);
     const host = document.createElement("div");
     host.id = HOST_ID;
-    host.setAttribute(
-      "style",
-      "all: initial !important; position: fixed !important; inset: 0 !important; z-index: 2147483647 !important; display: block !important;"
-    );
     // Attach to <html> (sibling of <body>) so the print stylesheet can hide the page cleanly.
     document.documentElement.append(host);
     return host;
@@ -2592,6 +2605,7 @@
       root.append(wrap);
       await showToast(wrap, "Reader isn't available for this page");
       host.remove();
+      document.getElementById(PRINT_STYLE_ID)?.remove();
       return;
     }
 
@@ -2646,31 +2660,18 @@
     document.documentElement.style.setProperty("overflow", "hidden", "important");
     document.body && document.body.style.setProperty("overflow", "hidden", "important");
 
-    // Print only the reader content (like Safari's "Print" while in Reader).
-    const printStyle = document.createElement("style");
-    printStyle.id = PRINT_STYLE_ID;
-    printStyle.textContent = `@media print {
-      html > body { display: none !important; }
-      html, html > #${HOST_ID} { position: static !important; overflow: visible !important; height: auto !important; }
-    }`;
-    (document.head || document.documentElement).append(printStyle);
-    // The rules above can't override the inline "!important" styles that pin Reader over the
-    // page (and stop the page scrolling), so without this only the first sheet would print.
-    // Unpin while printing, pin again afterwards.
-    const printQuery = window.matchMedia("print");
+    const printStyle = document.getElementById(PRINT_STYLE_ID); // made with the host
+    // The page's scroll lock is an inline style, which beats the print stylesheet. Lift it
+    // while printing in browsers that announce printing; the stylesheet covers the rest.
     const setPrinting = (printing) => {
-      host.style.setProperty("position", printing ? "static" : "fixed", "important");
       document.documentElement.style.setProperty("overflow", printing ? "visible" : "hidden", "important");
       if (document.body) document.body.style.setProperty("overflow", printing ? "visible" : "hidden", "important");
     };
-    const onPrintQuery = () => setPrinting(printQuery.matches);
     const onBeforePrint = () => setPrinting(true);
     const onAfterPrint = () => setPrinting(false);
-    printQuery.addEventListener("change", onPrintQuery);
     window.addEventListener("beforeprint", onBeforePrint);
     window.addEventListener("afterprint", onAfterPrint);
     const stopPrintWatch = () => {
-      printQuery.removeEventListener("change", onPrintQuery);
       window.removeEventListener("beforeprint", onBeforePrint);
       window.removeEventListener("afterprint", onAfterPrint);
     };
