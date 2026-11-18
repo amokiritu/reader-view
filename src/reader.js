@@ -250,6 +250,77 @@
       if (e.id && MISLEADING.test(e.id)) e.removeAttribute("id");
       if (MISLEADING_ROLES.has(e.getAttribute("role"))) e.removeAttribute("role");
     }
+    protectInlineBlocks(doc, new Set(paras.map(([p]) => p)));
+  }
+
+  // Section headings and photos that sit between the article's paragraphs, e.g. CNN's
+  // <h2 class="subheader"> ("header") and photo captions in "media__metadata" ("media",
+  // "meta"). Readability deletes those as page furniture; clear the misleading words so they
+  // stay. Blocks that really are clutter (related stories, promos, sign-ups) are left alone.
+  const INLINE_JUNK =
+    /related|promo|newsletter|sponsor|outbrain|taboola|recommend|advert|(^|[-_])ads?([-_]|$)|share|social|subscribe|signup|sign-up|teaser|more-from|read-more|most-popular|trending/i;
+
+  function protectInlineBlocks(doc, bodyParas) {
+    const isBodyBlock = (n) => {
+      if (!n) return false;
+      if (bodyParas.has(n)) return true;
+      // A wrapper holding one or two article paragraphs (The Verge wraps each one).
+      return n.children.length <= 2 && [...n.querySelectorAll("p")].some((p) => bodyParas.has(p));
+    };
+    const looksLikeJunk = (e) =>
+      [e, ...e.querySelectorAll("[class], [id]")].some((x) => INLINE_JUNK.test(`${x.getAttribute("class") || ""} ${x.id || ""}`));
+
+    for (const item of [...doc.body.querySelectorAll("h2, h3, h4, img, picture")]) {
+      // Climb to the block that sits next to the article's paragraphs.
+      let block = item;
+      let found = false;
+      for (let i = 0; i < 6 && block && block.parentElement && block !== doc.body; i++) {
+        if (isBodyBlock(block.previousElementSibling) || isBodyBlock(block.nextElementSibling)) {
+          found = true;
+          break;
+        }
+        block = block.parentElement;
+      }
+      if (!found || bodyParas.has(block) || block.tagName === "P") continue;
+      const text = norm(block.textContent);
+      if (text.length > 600 || looksLikeJunk(block)) continue;
+      // A heading that's just a link is usually a "related story" teaser.
+      if (/^H[2-4]$/.test(item.tagName) && item.querySelector("a") && norm(item.querySelector("a").textContent) === norm(item.textContent)) continue;
+      for (const e of [block, ...block.querySelectorAll("*")]) stripMisleading(e);
+      if (item.tagName === "IMG" || item.tagName === "PICTURE") toFigure(doc, block);
+    }
+  }
+
+  // A photo block with its caption and credit in separate <div>s (CNN and many others) comes
+  // out of Readability as a photo, a body-text paragraph and a stray credit. Rebuild it as a
+  // <figure> so Reader shows the caption under the photo.
+  function toFigure(doc, block) {
+    if (block.tagName === "FIGURE" || !block.parentNode || block.querySelectorAll("img").length !== 1) return;
+    const sel = '[itemprop="caption"], [itemprop="copyrightHolder"], [class*="caption" i], [class*="credit" i], figcaption';
+    const parts = [...block.querySelectorAll(sel)].filter((e) => !e.querySelector("img"));
+    const outer = parts.filter((e) => !parts.some((o) => o !== e && o.contains(e)));
+    if (!outer.length) return;
+    const media = block.querySelector("picture") || block.querySelector("img");
+    const fig = doc.createElement("figure");
+    const cap = doc.createElement("figcaption");
+    const seen = new Set();
+    for (const e of outer) {
+      const t = e.textContent.replace(/\s+/g, " ").trim();
+      if (!t || seen.has(t)) continue;
+      seen.add(t);
+      const credit = /credit|copyright/i.test(`${e.getAttribute("class") || ""} ${e.getAttribute("itemprop") || ""}`) ||
+        (e.tagName === "FIGCAPTION" && outer.length > 1 && t.length < 90);
+      if (cap.childNodes.length) cap.append(" ");
+      if (credit) {
+        const s = doc.createElement("span");
+        s.setAttribute("data-rv-credit", "");
+        s.textContent = t;
+        cap.append(s);
+      } else cap.append(t);
+    }
+    fig.append(media);
+    if (cap.childNodes.length) fig.append(cap);
+    block.replaceWith(fig);
   }
 
   function stripMisleading(e) {

@@ -255,6 +255,7 @@
   margin-top: 0.9em;
   text-align: left;
 }
+.content figcaption [data-rv-credit] { color: var(--muted); font-style: italic; }
 
 /* First image runs edge to edge across the card. */
 .content .lead-media {
