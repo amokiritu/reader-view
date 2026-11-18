@@ -19,7 +19,8 @@ in the font, size and theme you like.
 - **Table of contents** for longer articles, and a **summary** made by Chrome's built-in AI on
   your own computer.
 - **Multi-page articles** are joined into one page.
-- **Videos and posts stay in:** YouTube, Vimeo, X and Bluesky.
+- **Videos and posts stay in:** YouTube, Vimeo, X and Bluesky, including the video at the top
+  of a review.
 - **Reviews read cleanly:** pros and cons, and the review's score, appear as one tidy box;
   pull quotes look like pull quotes.
 - **Code stays readable:** code blocks and GitHub Gists (including Medium's) get a language

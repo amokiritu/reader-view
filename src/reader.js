@@ -995,6 +995,20 @@
       }
     }
 
+    // A video at the top of the page (common on reviews) leads instead of a photo.
+    const video = anchor && leadVideo(frag, anchor);
+    if (video) {
+      const f = document.createElement("iframe");
+      f.setAttribute("src", video);
+      const tmp = document.createDocumentFragment();
+      tmp.append(f);
+      finishEmbeds(tmp);
+      if (tmp.firstChild) {
+        frag.prepend(tmp);
+        return;
+      }
+    }
+
     const existing = new Set([...frag.querySelectorAll("img")].map((i) => i.src));
     let best = null;
     let bestArea = 0;
@@ -1069,6 +1083,36 @@
       fig.append(fc);
     }
     frag.prepend(fig);
+  }
+
+  // The address of a video player shown above the article text, if any. Sites often add it
+  // after the page loads (once the reader scrolls or accepts cookies), so when the player
+  // isn't there yet, Vox Media sites (The Verge, Polygon, Vox, Eater) name it in their page data.
+  function leadVideo(frag, anchor) {
+    const key = (src) => youtubeId(src) || (src || "").split(/[?#]/)[0];
+    const inBody = new Set([...frag.querySelectorAll("iframe")].map((f) => key(f.getAttribute("src"))));
+    const usable = (src) => embedKind(src) === "video" && !inBody.has(key(src));
+    for (const f of document.querySelectorAll("iframe")) {
+      if (f.closest(`#${HOST_ID}, nav, footer, aside, [role="navigation"], [role="complementary"]`)) continue;
+      if (!(f.compareDocumentPosition(anchor) & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
+      const r = f.getBoundingClientRect();
+      if (r.width < 400 || r.height < 200) continue;
+      let src = "";
+      try {
+        src = new URL(f.getAttribute("src") || "", location.href).href;
+      } catch {}
+      if (usable(src)) return src;
+    }
+    try {
+      const data = document.getElementById("__NEXT_DATA__")?.textContent || "";
+      const i = data.indexOf('"ledeMediaData"');
+      if (i < 0) return "";
+      const m = /<iframe[^>]*?\ssrc=\\?"(https?:\/\/[^"\\]+)/.exec(data.slice(i, i + 2000).replace(/\\u003c/gi, "<"));
+      const src = m ? m[1].replace(/\\u0026/gi, "&").replace(/&amp;/g, "&") : "";
+      return /^https?:\/\/(www\.)?youtube(-nocookie)?\.com\/embed\/[\w-]{11}([?#]|$)|^https?:\/\/player\.vimeo\.com\/video\/\d+([?#]|$)/i.test(src) && usable(src) ? src : "";
+    } catch {
+      return "";
+    }
   }
 
   // Safari runs the first image edge to edge across the page card.
@@ -1165,6 +1209,62 @@
       const sized = /^\s*\d+(\.\d+)?\s*(px)?\s*$/.test(svg.getAttribute("width") || "") && w >= 100;
       const labelled = svg.querySelector("text, title") || (svg.getAttribute("role") === "img" && svg.getAttribute("aria-label"));
       if (spriteOnly || besideText || !shapes.length || (!sized && !labelled)) svg.remove();
+    }
+  }
+
+  // Photo galleries and product cards: drop slide counters ("1/5", "3 of 12"), show a photo
+  // the site offers in two crops only once, and keep a gallery's caption with its photos.
+  function tidyPhotos(frag) {
+    const doc = frag.ownerDocument || document;
+    const COUNTER = /^\d{1,3}\s*(\/|of)\s*\d{1,3}$/i;
+    for (const n of [...frag.querySelectorAll("p, span, div, li")]) {
+      if (!frag.contains(n) || n.querySelector("img, picture, p, div") || !COUNTER.test(norm(n.textContent))) continue;
+      for (let a = n.parentElement, i = 0; a && i < 3; a = a.parentElement, i++) {
+        if (a.querySelectorAll("img").length >= 2) {
+          n.remove();
+          break;
+        }
+      }
+    }
+
+    const photo = (img) => {
+      try {
+        const u = new URL(img.getAttribute("src") || "");
+        if (!/^https?:$/.test(u.protocol)) return null;
+        // The bigger version: the size the site shows it at ("…, 600px"), then the file width.
+        const shown = parseInt(/(\d+)px\s*$/.exec(img.getAttribute("sizes") || "")?.[1], 10) || 0;
+        return { key: u.origin + u.pathname, w: shown * 100000 + (parseInt(u.searchParams.get("w"), 10) || 0) };
+      } catch {
+        return null;
+      }
+    };
+    const drop = (img) => {
+      let n = img.closest("picture") || img;
+      while (n.parentElement && /^(A|SPAN)$/.test(n.parentElement.tagName) && n.parentElement.children.length === 1 && !norm(n.parentElement.textContent)) n = n.parentElement;
+      n.remove();
+    };
+    const imgs = [...frag.querySelectorAll("img")];
+    for (let i = 1; i < imgs.length; i++) {
+      const a = photo(imgs[i - 1]);
+      const b = photo(imgs[i]);
+      if (!a || !b || a.key !== b.key || !frag.contains(imgs[i - 1])) continue;
+      let common = imgs[i - 1].parentElement;
+      while (common && !common.contains(imgs[i])) common = common.parentElement;
+      if (!common || norm(common.textContent).length > 40) continue; // words between them: two uses
+      if (b.w > a.w) drop(imgs[i - 1]);
+      else {
+        drop(imgs[i]);
+        imgs[i] = imgs[i - 1];
+      }
+    }
+
+    for (const cap of [...frag.querySelectorAll("figcaption")]) {
+      const p = cap.parentElement;
+      if (!p || p.tagName === "FIGURE" || !p.querySelector("img, picture")) continue;
+      if (norm(p.textContent).length > norm(cap.textContent).length + 40) continue; // holds article text too
+      const fig = doc.createElement("figure");
+      fig.append(...p.childNodes);
+      p.replaceWith(fig);
     }
   }
 
@@ -1312,6 +1412,7 @@
     finishEmbeds(frag);
     finishCode(frag);
     removeIcons(frag);
+    tidyPhotos(frag);
     markProsCons(frag);
     removeJunk(frag);
     markPullQuotes(frag);
