@@ -1412,7 +1412,15 @@
   function collectHeadings() {
     let hs = [...ui.content.querySelectorAll("h2")];
     if (hs.length < 2) hs = [...ui.content.querySelectorAll("h2, h3")];
-    return hs.filter((h) => h.textContent.trim().length > 1 && h.textContent.trim().length < 160);
+    hs = hs.filter((h) => h.textContent.trim().length > 1 && h.textContent.trim().length < 160);
+    if (hs.length >= 2) return hs;
+    // No real sections: some sites (The Verge's reviews) mark sections with pull quotes
+    // instead, so list those. Quotes naming a person are real quotes, not section breaks.
+    const pulls = [...ui.content.querySelectorAll("blockquote.pull.lifted")].filter(
+      (b) => !b.querySelector(".attribution") && b.textContent.trim().length < 160
+    );
+    const both = [...hs, ...pulls].sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+    return both.length >= 2 ? both : hs;
   }
 
   function refreshToc() {
