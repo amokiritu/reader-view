@@ -160,6 +160,11 @@ function serve() {
   check("a subtitle beside the headline is shown as the subtitle", head.dek.startsWith("Reading rooms that people once avoided"), head);
   check("a photo credit shown over the photo becomes its caption", head.caption === "Courtesy of the Town Library Trust", head);
   check("the date and section link above the text are not repeated in it", (head.start || "").startsWith("As Sam prepared"), head);
+  const heroText = await text(page);
+  check('a "Click to Post" box is removed', !/Click to Post|busy again, thanks to/.test(heroText));
+  check("a share link inside a sentence keeps its words", heroText.includes("or tweet about it to help it raise money"));
+  check('a "RELATED:" line is removed, the video beside it is kept', !/RELATED:|Reading Rooms Reopen/.test(heroText) && (await inReader(page, 'return !!content.querySelector("iframe[data-rv-embed=video]");')));
+  check("the author box is removed", !/covered libraries and schools/.test(heroText));
   await page.close();
 
   page = await openReader("images-article.html");

@@ -234,6 +234,7 @@
       aside.replaceWith(div);
     }
     keepCharts(clone, charts);
+    removeShareAndAuthorBoxes(clone);
     tidyHeadings(clone);
     normalizePullQuotes(clone);
     normalizeScoreBadges(clone);
@@ -1229,6 +1230,35 @@
   // link to such a page.
   const CTA_PATH = /\/(membership|members?|donate|donations?|support-us|subscribe|subscriptions?|join)(\/|$)/i;
 
+  // "Click to tweet" boxes and other share buttons: links that start a post on a social site,
+  // whatever the plugin (NovaShare on ChurchLeaders, Better Click To Tweet). Their words are a
+  // ready-made post, never the article's own text.
+  const SHARE_LINK =
+    /^https?:\/\/((www\.|mobile\.)?(twitter|x)\.com\/(intent\/(tweet|post)|share)|(www\.)?facebook\.com\/(sharer|dialog\/share)|(www\.)?linkedin\.com\/(sharing|shareArticle)|(www\.)?pinterest\.[a-z.]+\/pin\/create|(www\.)?reddit\.com\/submit|api\.whatsapp\.com\/send|wa\.me\/\?|t\.me\/share|bsky\.app\/intent\/compose|(www\.)?threads\.net\/intent)/i;
+  // An "about the author" box with the author's bio (often at the end of each page, so it
+  // would land mid-article when Reader joins a multi-page article).
+  const AUTHOR_BOX = /(^|[\s_-])(author[-_]?(box|bio|card|profile|about)|about[-_]?(the[-_]?)?author|single[-_]author[-_]box|post[-_]author[-_]bio)([\s_-]|$)/i;
+
+  function removeShareAndAuthorBoxes(doc) {
+    for (const a of [...doc.body.querySelectorAll("a[href]")]) {
+      if (!SHARE_LINK.test(a.getAttribute("href").trim())) continue;
+      // A share link inside a sentence ("…or <a>tweet this</a>") keeps its words.
+      const block = a.parentElement && a.parentElement.closest("p, li");
+      if (block && norm(block.textContent).length > norm(a.textContent).length + 40) a.replaceWith(...a.childNodes);
+      else a.remove();
+    }
+    for (const box of [...doc.body.querySelectorAll("[class], [id]")]) {
+      if (!box.isConnected || !AUTHOR_BOX.test(`${box.getAttribute("class") || ""} ${box.id || ""}`)) continue;
+      // Its words, without the CSS some sites put in a <style> inside the box.
+      const t = norm([...box.querySelectorAll("*")].filter((e) => !/^(STYLE|SCRIPT|NOSCRIPT|TEMPLATE)$/.test(e.tagName))
+        .flatMap((e) => [...e.childNodes].filter((c) => c.nodeType === 3).map((c) => c.nodeValue)).join(" "));
+      // A bio (a sentence or more about the writer), not just "By Jo Mwangi"; and not a
+      // wrapper around the article itself.
+      if (t.length < 80 || t.length > 1200 || box.querySelectorAll("p").length > 3) continue;
+      box.remove();
+    }
+  }
+
   function removeCallToAction(frag) {
     for (const a of [...frag.querySelectorAll("a[href]")]) {
       if (!frag.contains(a)) continue;
@@ -1248,8 +1278,32 @@
     }
   }
 
+  // "RELATED: <link to another story>" lines inside the text. Only the label and the link go:
+  // the same paragraph sometimes also holds a video (ChurchLeaders).
+  const RELATED_LABEL = /^(related|related (story|article|reading|content)|read more|read also|also read|see also|more|recommended|don't miss|must read)\s*:/i;
+
+  function removeRelatedLinks(frag) {
+    for (const p of [...frag.querySelectorAll("p, div, li")]) {
+      if (!frag.contains(p) || p.querySelector("p, div, li") || !RELATED_LABEL.test(norm(p.textContent))) continue;
+      const links = [...p.querySelectorAll("a")];
+      const label = norm(p.textContent).match(RELATED_LABEL)[0];
+      const linked = links.map((a) => norm(a.textContent)).join(" ");
+      // Nothing but the label and the link(s): otherwise it's a sentence of the article.
+      if (!links.length || norm(norm(p.textContent).slice(label.length)) !== norm(linked)) continue;
+      const media = p.querySelector("img, picture, video, iframe, figure");
+      if (!media) {
+        p.remove();
+        continue;
+      }
+      // Keep the media, drop the words.
+      const keep = [...p.querySelectorAll("img, picture, video, iframe, figure")].filter((m) => !m.parentElement.closest("picture, figure, video"));
+      p.replaceChildren(...keep);
+    }
+  }
+
   function removeJunk(frag) {
     removeCallToAction(frag);
+    removeRelatedLinks(frag);
     // Site promos: remove the whole paragraph/block, not just the inner element that matched.
     for (const n of [...frag.querySelectorAll("p, li, div, section, aside")]) {
       if (!n.parentNode || n.querySelector("img, picture, video, iframe, p") || n.closest(".code-block, .procon")) continue;
