@@ -27,7 +27,7 @@
     { id: "times", label: "Times New Roman", stack: '"Times New Roman", Times, serif' },
   ];
 
-  const DEFAULTS = { theme: "white", font: "system", zoom: 100, sidebar: true };
+  const DEFAULTS = { theme: "white", font: "system", zoom: 115, sidebar: true };
   const SETTING_KEYS = Object.keys(DEFAULTS);
   const HOST_ID = "__reader-view-host";
   const PRINT_STYLE_ID = "__reader-view-print";
@@ -74,7 +74,7 @@
     try {
       const s = await chrome.storage.sync.get(SETTING_KEYS);
       settings = { ...DEFAULTS, ...s };
-      if (!ZOOMS.includes(settings.zoom)) settings.zoom = 100;
+      if (!ZOOMS.includes(settings.zoom)) settings.zoom = DEFAULTS.zoom;
     } catch {}
   }
 
@@ -1319,6 +1319,26 @@
     return dekFromDescription(article, frag) || dekBelowHeadline(article, frag);
   }
 
+  // Bits of the page's header left above the first paragraph: the date on a line of its own
+  // (Reader's header shows it) and a lone link to the article's section ("Climate + Environment").
+  const DATE_LINE =
+    /^((mon|tue|wed|thu|fri|sat|sun)[a-z]*\.?,?\s+)?((jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{4}|\d{4}-\d{2}-\d{2})$/i;
+
+  function dropHeaderLeftovers(frag) {
+    const firstLong = [...frag.querySelectorAll("p")].find((p) => norm(p.textContent).length > 100);
+    if (!firstLong) return;
+    for (const n of [...frag.querySelectorAll("p, div")]) {
+      if (!(n.compareDocumentPosition(firstLong) & Node.DOCUMENT_POSITION_FOLLOWING)) break;
+      if (n.closest("figure") || n.querySelector("img, picture, video, iframe, svg, p, div")) continue;
+      const t = n.textContent.replace(/\s+/g, " ").trim();
+      const links = n.querySelectorAll("a");
+      const section =
+        links.length === 1 && t.length < 40 && norm(links[0].textContent) === norm(t) &&
+        /\/(category|categories|section|sections|topics?|tags?)\//i.test(links[0].getAttribute("href") || "");
+      if (DATE_LINE.test(t) || section) n.remove();
+    }
+  }
+
   // Remove the subtitle from the body if Readability also extracted it there.
   function dropFromBody(frag, key) {
     for (const c of frag.querySelectorAll("p, h2, h3, div")) {
@@ -1359,7 +1379,16 @@
       if (t.length > 350) break;
       if (/^by\s/i.test(t) || n.querySelector("time")) continue;
       const key = norm(t);
-      if (firstP && (firstP === key || firstP.startsWith(key.slice(0, 60)))) break; // that's the body
+      // The same words as the first paragraph: usually that's the body, unless they sit in a
+      // small header block with the headline (Reasons to be Cheerful), where they're a subtitle.
+      if (firstP && (firstP === key || firstP.startsWith(key.slice(0, 60)))) {
+        let common = h1.parentElement;
+        while (common && !common.contains(n)) common = common.parentElement;
+        // (In a header block, that is: no other paragraph of the article is in it.)
+        const others = [...frag.querySelectorAll("p")].map((p) => norm(p.textContent)).filter((t) => t.length > 60 && t !== key);
+        const commonText = common ? norm(common.textContent) : "";
+        if (!common || !others.length || others.some((o) => commonText.includes(o.slice(0, 60)))) break;
+      }
       dropFromBody(frag, key);
       return t;
     }
@@ -1522,6 +1551,7 @@
       src = og && og.content;
     }
     if (!src) return;
+    if (!caption) caption = photoCredit(best, src, anchor);
 
     const fig = document.createElement("figure");
     const img = document.createElement("img");
@@ -1563,6 +1593,39 @@
       fig.append(fc);
     }
     frag.prepend(fig);
+  }
+
+  // A credit or caption the site shows with the lead photo but outside any <figure>, e.g.
+  // Reasons to be Cheerful's <div class="image-credit"> in a header whose background is the
+  // photo. Without this it shows up as a stray line at the top of the article.
+  function photoCredit(img, src, anchor) {
+    const holders = img ? [img] : [];
+    if (!img && src) {
+      // Compare decoded addresses: one may say "©" where the other says "%C2%A9".
+      const decode = (u) => {
+        try {
+          return decodeURIComponent(u);
+        } catch {
+          return u;
+        }
+      };
+      let file = "";
+      try {
+        file = decode(new URL(src, location.href).pathname.split("/").pop());
+      } catch {}
+      if (file) for (const n of document.querySelectorAll('[style*="background"]')) if (decode(n.getAttribute("style") || "").includes(file)) holders.push(n);
+    }
+    for (const h of holders) {
+      for (let a = h, i = 0; a && a !== document.body && i < 4; a = a.parentElement, i++) {
+        if (anchor && a.contains(anchor)) break; // reached the article text
+        const credit = [...a.querySelectorAll('[class*="credit" i], [class*="caption" i]')].find((n) => {
+          const t = norm(n.textContent);
+          return t.length >= 3 && t.length <= 200 && !n.querySelector("img, p, div, figure") && n.getClientRects().length > 0 && !n.closest(`#${HOST_ID}`);
+        });
+        if (credit) return credit.textContent.replace(/\s+/g, " ").trim();
+      }
+    }
+    return "";
   }
 
   // The address of a video player shown above the article text, if any. Sites often add it
@@ -1670,6 +1733,7 @@
     sanitizeFragment(frag, article.title);
     addRatingToProsCons(frag);
     article.dek = findDek(article, frag);
+    dropHeaderLeftovers(frag);
 
     // Drop a short leading byline/dateline block, since the header already shows it.
     const bylineKey = norm(article.byline).replace(/^by\s+/, "");
@@ -2365,7 +2429,7 @@
 
   function changeSize(delta) {
     const i = ZOOMS.indexOf(settings.zoom);
-    settings.zoom = delta === 0 ? 100 : ZOOMS[Math.max(0, Math.min(ZOOMS.length - 1, i + delta))];
+    settings.zoom = delta === 0 ? DEFAULTS.zoom : ZOOMS[Math.max(0, Math.min(ZOOMS.length - 1, i + delta))];
     applySettings();
     saveSettings();
   }
@@ -2375,7 +2439,7 @@
   function buildPopover() {
     const smaller = el("button", { class: "size-btn", "aria-label": "Make text smaller", title: "Make text smaller", onclick: () => changeSize(-1) }, el("span", { class: "a-small", text: "A" }));
     const larger = el("button", { class: "size-btn", "aria-label": "Make text bigger", title: "Make text bigger", onclick: () => changeSize(1) }, el("span", { class: "a-large", text: "A" }));
-    const zoomLabel = el("button", { class: "zoom-label", title: "Reset zoom (Ctrl+0)", "aria-label": "Zoom level, click to reset", onclick: () => changeSize(0), text: "100%" });
+    const zoomLabel = el("button", { class: "zoom-label", title: "Reset zoom (Ctrl+0)", "aria-label": "Zoom level, click to reset", onclick: () => changeSize(0), text: DEFAULTS.zoom + "%" });
 
     const themeButtons = THEMES.map((t) =>
       el("button", {

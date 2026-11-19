@@ -163,7 +163,7 @@ No build step: the extension runs straight from the repository.
 open `http://localhost:8766/test/sample-article.html` (also `embeds-article.html`,
 `code-article.html`, `review-article.html`, `images-article.html`, `paywall-article.html`,
 `security-article.html`, `hidden-dialog-article.html`, `split-article.html`, `words-article.html`,
-`other-story-article.html`, `chart-article.html`, `multipage/garden-guide.html`). URL options:
+`other-story-article.html`, `chart-article.html`, `hero-article.html`, `multipage/garden-guide.html`). URL options:
 
 - `?open=1` opens Reader on load.
 - `?theme=night&font=georgia&zoom=120&sidebar=0` preset the settings.

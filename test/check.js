@@ -154,6 +154,14 @@ function serve() {
     !!drawn && drawn.title && drawn.y === "30" && drawn.fill === "rgb(0, 160, 136)", drawn);
   await page.close();
 
+  page = await openReader("hero-article.html");
+  const head = await inReader(page, `return { dek: root.querySelector(".dek")?.textContent || "", caption: content.querySelector(".lead-media figcaption")?.textContent || "",
+    start: [...content.querySelectorAll("p, div")].find((n) => !n.closest("figure") && n.textContent.trim())?.textContent.trim().slice(0, 30) };`);
+  check("a subtitle beside the headline is shown as the subtitle", head.dek.startsWith("Reading rooms that people once avoided"), head);
+  check("a photo credit shown over the photo becomes its caption", head.caption === "Courtesy of the Town Library Trust", head);
+  check("the date and section link above the text are not repeated in it", (head.start || "").startsWith("As Sam prepared"), head);
+  await page.close();
+
   page = await openReader("images-article.html");
   const photos = await inReader(page, 'return [...content.querySelectorAll("img")].map((i) => i.getAttribute("src"));');
   check("photos that load as you scroll are shown", ["hills-1400.svg", "town.svg", "coast-large.svg"].every((f) => photos.some((s) => s.endsWith("img/" + f))) && !photos.some((s) => s.startsWith("data:")), photos);
@@ -210,8 +218,7 @@ function serve() {
     await press(page);
     await pause(page, 1000);
   }
-  await page.keyboard.press("Control+=");
-  await page.keyboard.press("Control+=");
+  await page.keyboard.press("Control+="); // 115% (the default) -> 125%
   await inReader(page, 'root.querySelector(".swatch-night").click();');
   await pause(page, 700);
   const saved = await worker.evaluate(() => chrome.storage.sync.get(["zoom", "theme"]));
@@ -221,7 +228,7 @@ function serve() {
   page = await openReader("images-article.html");
   check("settings carry over to the next article", await inReader(page, 'return reader.classList.contains("theme-night") && root.querySelector(".zoom-label").textContent === "125%";'));
   await page.keyboard.press("Control+0");
-  check("Ctrl+0 resets the zoom", (await inReader(page, 'return root.querySelector(".zoom-label").textContent;')) === "100%");
+  check("Ctrl+0 resets the zoom to the default, 115%", (await inReader(page, 'return root.querySelector(".zoom-label").textContent;')) === "115%");
   await inReader(page, 'content.querySelector("img").click();');
   const first = await inReader(page, 'return root.querySelector(".lightbox").hidden ? "" : root.querySelector(".lb-img").src;');
   await page.keyboard.press("ArrowRight");
